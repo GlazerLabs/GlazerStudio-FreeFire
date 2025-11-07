@@ -35,7 +35,7 @@ const Login = () => {
             if (error) clearError();
           }}
           className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
-          placeholder="Esports@glazer.studio"
+          placeholder="Enter your email"
           required
         />
 
@@ -50,7 +50,7 @@ const Login = () => {
             if (error) clearError();
           }}
           className="w-full px-4 py-3 rounded-xl bg-slate-800 text-white border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
-          placeholder="GlazerAdmin@2025"
+          placeholder="Enter your password"
           required
         />
 
