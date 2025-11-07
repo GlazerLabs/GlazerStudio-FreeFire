@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import TeamCard from './TeamCard';
 
 const LiveScoring = () => {
@@ -15,6 +15,32 @@ const LiveScoring = () => {
   const [jsonWriteStatus, setJsonWriteStatus] = useState(null); // Status for JSON writing
   const [logoFolderPath, setLogoFolderPath] = useState(''); // Logo folder path
   const [hpFolderPath, setHpFolderPath] = useState(''); // NEW: HP images folder path
+  const safeZoneTriggeredRef = useRef(new Set());
+  const SAFE_ZONE_API_URL = 'http://192.168.110.12:8088/api/?Function=SetImageVisible&Input=1&SelectedName=ZONE1.Source&Value=true';
+
+  const VMIX_BASE_URL = 'http://192.168.110.12:8088/api/?Function=SetImageVisible&Input=1';
+
+  const getVmixZoneName = (teamKey) => {
+    if (teamKey === undefined || teamKey === null) return null;
+
+    const numericId = Number(teamKey);
+    if (!Number.isFinite(numericId) || numericId <= 0) return null;
+
+    return `ZONE${numericId}`;
+  };
+
+  const setZoneVisibility = async (zoneName, visible) => {
+    const url = `${VMIX_BASE_URL}&SelectedName=${zoneName}.Source&Value=${visible}`;
+    try {
+      await fetch(url);
+      console.log(`vMix ${zoneName} → ${visible}`);
+    } catch (err) {
+      console.error('Failed updating vMix visibility', err);
+    }
+  };
+
+
+
 
   // Silent background update function (no loading state)
   const fetchLiveScoringSilent = async () => {
@@ -113,7 +139,7 @@ const LiveScoring = () => {
   const generateVmixJson = () => {
     // Calculate teams inside this function to avoid initialization issues
     const currentTeams = getFilteredTeams();
-    
+
     if (!liveData || !currentTeams.length) return null;
 
     // Calculate total kills for each team and sort by kills (highest first)
@@ -127,6 +153,18 @@ const LiveScoring = () => {
 
     // Sort teams by kills (highest first)
     const sortedTeams = [...teamsWithKills].sort((a, b) => b.totalKills - a.totalKills);
+
+    sortedTeams.forEach((team, index) => {
+      const zoneName = getVmixZoneName(index + 1);
+      if (!zoneName) return;
+
+      const anyPlayerOutside = team.player_stats?.some((player) => player.is_in_safe_zone === false);
+      if (anyPlayerOutside) {
+        setZoneVisibility(zoneName, false);
+      } else {
+        setZoneVisibility(zoneName, true);
+      }
+    });
 
     const jsonData = {};
 
@@ -405,6 +443,49 @@ const LiveScoring = () => {
     console.log('Generated logo path:', logoPath, 'for team:', teamName);
     return logoPath;
   };
+
+ 
+
+
+const triggerSafeZoneAlert = async (playerId) => {
+  try {
+    await fetch(SAFE_ZONE_API_URL);
+    console.log(`Triggered safe-zone alert for ${playerId}`);
+  } catch (err) {
+    console.error('Safe-zone alert failed:', err);
+  }
+};
+
+useEffect(() => {
+  if (!liveData) return;
+
+  const currentTeams = getFilteredTeams();
+  const stillOutside = new Set();
+
+  currentTeams.forEach((team) => {
+    team.player_stats?.forEach((player, idx) => {
+      const status = getPlayerStatus(player);
+      const playerId =
+        player.account_id ||
+        player.player_id ||
+        `${team.assigned_id || team.team_id || 'team'}-${idx}`;
+
+      if (player.is_in_safe_zone === false && status !== 'dead') {
+        stillOutside.add(playerId);
+        if (!safeZoneTriggeredRef.current.has(playerId)) {
+          triggerSafeZoneAlert(playerId);
+          safeZoneTriggeredRef.current.add(playerId);
+        }
+      }
+    });
+  });
+
+  safeZoneTriggeredRef.current.forEach((id) => {
+    if (!stillOutside.has(id)) {
+      safeZoneTriggeredRef.current.delete(id);
+    }
+  });
+}, [liveData]);
 
   const teams = getFilteredTeams();
   const scoringData = extractScoringData(liveData);
