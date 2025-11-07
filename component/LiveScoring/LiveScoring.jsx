@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import TeamCard from './TeamCard';
 
 const LiveScoring = () => {
@@ -15,61 +15,8 @@ const LiveScoring = () => {
   const [jsonWriteStatus, setJsonWriteStatus] = useState(null); // Status for JSON writing
   const [logoFolderPath, setLogoFolderPath] = useState(''); // Logo folder path
   const [hpFolderPath, setHpFolderPath] = useState(''); // NEW: HP images folder path
-  const safeZoneTriggeredRef = useRef(new Set());
-  const zoneVisibilityCache = useRef(new Map());
-  const VMIX_INPUT_NAME = 'ALIVE STATUS';
-  const VMIX_BASE_URL = `http://192.168.110.12:8088/api/?Function=SetImageVisible&Input=${encodeURIComponent(VMIX_INPUT_NAME)}`;
-  const SAFE_ZONE_API_URL = `${VMIX_BASE_URL}&SelectedName=ZONE1.Source&Value=true`;
-
-  const getVmixZoneName = (teamKey) => {
-    if (teamKey === undefined || teamKey === null) return null;
-
-    const numericId = Number(teamKey);
-    if (!Number.isFinite(numericId) || numericId <= 0) return null;
-
-    return `ZONE${numericId}`;
-  };
-
-  const setZoneVisibility = async (zoneName, visible) => {
-    const cache = zoneVisibilityCache.current;
-    if (cache.get(zoneName) === visible) {
-      return;
-    }
-
-    const url = `${VMIX_BASE_URL}&SelectedName=${zoneName}.Source&Value=${visible}`;
-    try {
-      await fetch(url);
-      cache.set(zoneName, visible);
-      console.log(`vMix ${zoneName} → ${visible}`);
-    } catch (err) {
-      console.error('Failed updating vMix visibility', err);
-    }
-  };
-
-  const resetAllZones = async () => {
-    const cache = zoneVisibilityCache.current;
-    const knownZones = new Set(cache.keys());
-
-    const manualTeamCount = teamNamesInput
-      .split('\n')
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0).length;
-
-    const zoneCount = Math.max(manualTeamCount, knownZones.size);
-    for (let i = 1; i <= zoneCount; i += 1) {
-      const zoneName = getVmixZoneName(i);
-      if (zoneName) {
-        knownZones.add(zoneName);
-      }
-    }
-
-    cache.clear();
-
-    const zoneList = Array.from(knownZones);
-    if (!zoneList.length) return;
-
-    await Promise.all(zoneList.map((zoneName) => setZoneVisibility(zoneName, true)));
-  };
+  const [zoneInImage, setZoneInImage] = useState('');
+  const [zoneOutImage, setZoneOutImage] = useState('');
 
 
 
@@ -112,8 +59,6 @@ const LiveScoring = () => {
     setLoading(true);
     setError(null);
     setIsInitialLoad(true);
-
-    await resetAllZones();
 
     try {
       const response = await fetch(
@@ -188,19 +133,9 @@ const LiveScoring = () => {
     // Sort teams by kills (highest first)
     const sortedTeams = [...teamsWithKills].sort((a, b) => b.totalKills - a.totalKills);
 
-    sortedTeams.forEach((team, index) => {
-      const zoneName = getVmixZoneName(index + 1);
-      if (!zoneName) return;
-
-      const anyPlayerOutside = team.player_stats?.some((player) => player.is_in_safe_zone === false);
-      if (anyPlayerOutside) {
-        setZoneVisibility(zoneName, false);
-      } else {
-        setZoneVisibility(zoneName, true);
-      }
-    });
-
     const jsonData = {};
+    const zoneIn = zoneInImage.trim();
+    const zoneOut = zoneOutImage.trim();
 
     // Generate Team names (Team1, Team2, Team3) - capital T
     sortedTeams.forEach((team, index) => {
@@ -229,6 +164,19 @@ const LiveScoring = () => {
     sortedTeams.forEach((team, index) => {
       const position = index + 1;
       jsonData[`FIN${position}`] = team.totalKills || 0;
+    });
+
+    // Generate Zone image paths (Zone1, Zone2, ...) - positioned before win rates
+    sortedTeams.forEach((team, index) => {
+      const anyPlayerOutside = team.player_stats?.some((player) => player.is_in_safe_zone === false);
+      jsonData[`Zone${index + 1}`] = anyPlayerOutside ? zoneOut || '' : zoneIn || '';
+    });
+
+    // Generate Win Rates (WinRate1, WinRate2, ...)
+    sortedTeams.forEach((team, index) => {
+      const position = index + 1;
+      const winRate = team.win_rate ?? 0;
+      jsonData[`WinRate${position}`] = typeof winRate === 'number' ? winRate : parseFloat(winRate) || 0;
     });
 
     // Generate HP IMAGE PATHS for each team (only include existing players)
@@ -277,20 +225,6 @@ const LiveScoring = () => {
     // Return as array with single object
     return [jsonData];
   };
-
-  // NEW: Helper function to get player status (reuse from TeamCard logic)
-  const getPlayerStatus = (player) => {
-    if (player.player_state !== undefined) {
-      if (player.player_state === 0) return 'alive';
-      if (player.player_state === 1) return 'dead';
-      if (player.player_state === 2) return 'knockdown';
-    }
-    if (player.hp_info?.current_hp !== undefined) {
-      return player.hp_info.current_hp === 0 ? 'dead' : 'alive';
-    }
-    return player.is_eliminated ? 'dead' : 'alive';
-  };
-
   // NEW: Function to write JSON to file
   const writeJsonToFile = async () => {
     if (!jsonFilePath.trim()) {
@@ -340,7 +274,7 @@ const LiveScoring = () => {
       }, 100);
       return () => clearTimeout(timeoutId);
     }
-  }, [liveData, teamNamesInput, jsonFilePath, logoFolderPath]); // Added logoFolderPath to dependencies
+  }, [liveData, teamNamesInput, jsonFilePath, logoFolderPath, hpFolderPath, zoneInImage, zoneOutImage]);
 
   // Helper function to extract players/teams from data
   const extractScoringData = (data) => {
@@ -479,48 +413,6 @@ const LiveScoring = () => {
   };
 
  
-
-
-const triggerSafeZoneAlert = async (playerId) => {
-  try {
-    await fetch(SAFE_ZONE_API_URL);
-    console.log(`Triggered safe-zone alert for ${playerId}`);
-  } catch (err) {
-    console.error('Safe-zone alert failed:', err);
-  }
-};
-
-useEffect(() => {
-  if (!liveData) return;
-
-  const currentTeams = getFilteredTeams();
-  const stillOutside = new Set();
-
-  currentTeams.forEach((team) => {
-    team.player_stats?.forEach((player, idx) => {
-      const status = getPlayerStatus(player);
-      const playerId =
-        player.account_id ||
-        player.player_id ||
-        `${team.assigned_id || team.team_id || 'team'}-${idx}`;
-
-      if (player.is_in_safe_zone === false && status !== 'dead') {
-        stillOutside.add(playerId);
-        if (!safeZoneTriggeredRef.current.has(playerId)) {
-          triggerSafeZoneAlert(playerId);
-          safeZoneTriggeredRef.current.add(playerId);
-        }
-      }
-    });
-  });
-
-  safeZoneTriggeredRef.current.forEach((id) => {
-    if (!stillOutside.has(id)) {
-      safeZoneTriggeredRef.current.delete(id);
-    }
-  });
-}, [liveData]);
-
   const teams = getFilteredTeams();
   const scoringData = extractScoringData(liveData);
 
@@ -581,6 +473,38 @@ useEffect(() => {
               />
               <p className="text-slate-400 text-xs mb-4">
                 Enter the folder path where HP images are stored. HP files should be named as numbers from 0-200 (e.g., 0.png, 70.png, 200.png)
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-200 text-sm font-semibold mb-3">
+                Zone In Image Link
+              </label>
+              <input
+                type="text"
+                value={zoneInImage}
+                onChange={(e) => setZoneInImage(e.target.value)}
+                placeholder="https://example.com/in-zone.png"
+                className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all shadow-lg font-mono text-sm mb-4"
+              />
+              <p className="text-slate-400 text-xs mb-4">
+                Provide the full image URL to display when a team is inside the safe zone.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-200 text-sm font-semibold mb-3">
+                Zone Out Image Link
+              </label>
+              <input
+                type="text"
+                value={zoneOutImage}
+                onChange={(e) => setZoneOutImage(e.target.value)}
+                placeholder="https://example.com/out-zone.png"
+                className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all shadow-lg font-mono text-sm mb-4"
+              />
+              <p className="text-slate-400 text-xs mb-4">
+                Provide the full image URL to display when a team is outside the safe zone.
               </p>
             </div>
 
