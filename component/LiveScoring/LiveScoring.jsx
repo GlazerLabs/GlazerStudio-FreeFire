@@ -358,6 +358,12 @@ const LiveScoring = () => {
       jsonData[`Team${position}`] = teamName;
     });
 
+    // Generate Rank fields (RANK1, RANK2, ...)
+    sortedTeams.forEach((_, index) => {
+      const position = index + 1;
+      jsonData[`RANK${position}`] = position;
+    });
+
     // Generate Logo paths (Logo1, Logo2, Logo3) - capital L
     sortedTeams.forEach((team, index) => {
       const teamName = team.team_name || `Team ${index + 1}`;
@@ -387,7 +393,7 @@ const LiveScoring = () => {
       const totalPointsValue = Number.isFinite(team.combinedTotalPoints)
         ? Math.round(team.combinedTotalPoints)
         : 0;
-      jsonData[`Total${position}`] = totalPointsValue;
+      jsonData[`TOTAL${position}`] = totalPointsValue;
     });
 
     // Generate Zone image paths (ZONE1, ZONE2, ...) - positioned before win rates
@@ -401,7 +407,9 @@ const LiveScoring = () => {
     sortedTeams.forEach((team, index) => {
       const position = index + 1;
       const winRate = team.win_rate ?? 0;
-      jsonData[`WINRATE${position}`] = typeof winRate === 'number' ? winRate : parseFloat(winRate) || 0;
+      const winRateNumeric = typeof winRate === 'number' ? winRate : parseFloat(winRate) || 0;
+      const winRateValue = Number.isFinite(winRateNumeric) ? winRateNumeric : 0;
+      jsonData[`WINRATE${position}`] = `${winRateValue}%`;
     });
 
     // Generate HP IMAGE PATHS for each team (only include existing players)
