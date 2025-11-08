@@ -54,7 +54,8 @@ const LiveScoring = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [teamNamesInput, setTeamNamesInput] = useState('Team 1\nTeam 2\nTeam 3');
+  const [teamNameOverrides, setTeamNameOverrides] = useState({});
+  const [teamNameSuggestions, setTeamNameSuggestions] = useState([]);
   const [jsonFilePath, setJsonFilePath] = useState(''); // File path state
   const [jsonWriteStatus, setJsonWriteStatus] = useState(null); // Status for JSON writing
   const [logoFolderPath, setLogoFolderPath] = useState('D:\\Production Assets\\team logos'); // Logo folder path
@@ -266,6 +267,12 @@ const LiveScoring = () => {
       const name = typeof team.team_name === 'string' ? team.team_name.trim() : '';
       if (name) {
         attempts.push(name, name.toLowerCase());
+      }
+
+      const originalName =
+        typeof team.original_team_name === 'string' ? team.original_team_name.trim() : '';
+      if (originalName && originalName !== name) {
+        attempts.push(originalName, originalName.toLowerCase());
       }
 
       const teamId = team.team_id ?? team.assigned_id ?? team.id;
@@ -509,7 +516,7 @@ const LiveScoring = () => {
       }, 100);
       return () => clearTimeout(timeoutId);
     }
-  }, [liveData, teamNamesInput, jsonFilePath, logoFolderPath, hpFolderPath, zoneInImage, zoneOutImage]);
+  }, [liveData, teamNameOverrides, jsonFilePath, logoFolderPath, hpFolderPath, zoneInImage, zoneOutImage]);
 
   // Helper function to extract players/teams from data
   const extractScoringData = (data) => {
@@ -584,53 +591,126 @@ const LiveScoring = () => {
     return [];
   };
 
-  // Parse team names from input and assign IDs
-  const parseTeamNames = () => {
-    if (!teamNamesInput.trim()) return [];
-    
-    return teamNamesInput
-      .split('\n')
-      .map((name, index) => ({
-        id: index + 1,
-        name: name.trim()
-      }))
-      .filter(team => team.name.length > 0);
+  const normalizeTeamNameKey = (name) => {
+    if (typeof name !== 'string') return '';
+    return name.trim().toLowerCase();
   };
 
-  // Get filtered teams based on entered team names
-  const getFilteredTeams = () => {
-    const allTeams = extractTeams(liveData);
-    const parsedTeamNames = parseTeamNames();
-    
-    if (parsedTeamNames.length === 0) {
-      return allTeams; // If no team names entered, show all teams
+  const resolveTeamBaseName = (team, index = 0) => {
+    const candidates = [
+      team?.team_name,
+      team?.teamName,
+      team?.name,
+      team?.display_name,
+      team?.displayName,
+      team?.short_name,
+      team?.shortName,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
     }
 
-    // Map teams from API response to entered team names by matching team_id
-    return parsedTeamNames.map(parsedTeam => {
-      // Find team from API response where team_id matches the assigned ID
-      const matchingTeam = allTeams.find(team => {
-        const apiTeamId = team.team_id || team.id;
-        return apiTeamId === parsedTeam.id;
+    const numericId =
+      team?.team_id ?? team?.assigned_id ?? team?.id ?? (Number.isFinite(index) ? index + 1 : null);
+
+    if (numericId !== null && numericId !== undefined) {
+      return `Team ${numericId}`;
+    }
+
+    return `Team ${index + 1}`;
+  };
+
+  useEffect(() => {
+    if (!liveData) {
+      return;
+    }
+
+    const allTeams = extractTeams(liveData);
+
+    if (!Array.isArray(allTeams) || allTeams.length === 0) {
+      return;
+    }
+
+    setTeamNameOverrides((prev) => {
+      const next = {};
+
+      allTeams.forEach((team, index) => {
+        const baseName = resolveTeamBaseName(team, index);
+        const key = normalizeTeamNameKey(baseName);
+        if (!key) return;
+
+        if (typeof prev[key] === 'string') {
+          next[key] = prev[key];
+        } else if (
+          Array.isArray(teamNameSuggestions) &&
+          typeof teamNameSuggestions[index] === 'string'
+        ) {
+          next[key] = teamNameSuggestions[index];
+        } else {
+          next[key] = '';
+        }
       });
 
-      // If found, return the team with the assigned ID and entered name
-      if (matchingTeam) {
-        return {
-          ...matchingTeam,
-          assigned_id: parsedTeam.id,
-          team_name: parsedTeam.name // Use the entered name
-        };
+      const prevKeys = Object.keys(prev);
+      const nextKeys = Object.keys(next);
+
+      if (
+        prevKeys.length === nextKeys.length &&
+        prevKeys.every(
+          (key) => Object.prototype.hasOwnProperty.call(next, key) && prev[key] === next[key]
+        )
+      ) {
+        return prev;
       }
 
-      // Return placeholder team if not found in API response
+      return next;
+    });
+  }, [liveData, teamNameSuggestions]);
+
+  const handleTeamOverrideChange = (baseName, value) => {
+    const key = normalizeTeamNameKey(baseName);
+    if (!key) return;
+
+    setTeamNameOverrides((prev) => {
+      if (prev[key] === value) {
+        return prev;
+      }
       return {
-        assigned_id: parsedTeam.id,
-        team_name: parsedTeam.name,
-        team_id: parsedTeam.id,
-        player_stats: [],
-        kill_count: 0,
-        ranking_score: 0
+        ...prev,
+        [key]: value,
+      };
+    });
+  };
+
+  const getFilteredTeams = () => {
+    const allTeams = extractTeams(liveData);
+
+    if (!Array.isArray(allTeams) || allTeams.length === 0) {
+      return [];
+    }
+
+    return allTeams.map((team, index) => {
+      const baseName = resolveTeamBaseName(team, index);
+      const key = normalizeTeamNameKey(baseName);
+      const overrideValue =
+        key && typeof teamNameOverrides[key] === 'string' ? teamNameOverrides[key] : '';
+      const finalName =
+        typeof overrideValue === 'string' && overrideValue.trim().length > 0
+          ? overrideValue.trim()
+          : baseName;
+
+      return {
+        ...team,
+        assigned_id:
+          team?.assigned_id ??
+          team?.team_id ??
+          team?.id ??
+          (Number.isFinite(index) ? index + 1 : undefined),
+        team_name: finalName,
+        original_team_name: baseName,
       };
     });
   };
@@ -1269,26 +1349,7 @@ const LiveScoring = () => {
         );
 
         if (importedTeamNames.length > 0) {
-          setTeamNamesInput((prev) => {
-            const existingNames = prev
-              ? prev
-                  .split(/\r?\n/)
-                  .map((name) => name.trim())
-                  .filter((name) => name.length > 0)
-              : [];
-
-            const existingLower = new Set(existingNames.map((name) => name.toLowerCase()));
-
-            const appended = [...existingNames];
-            importedTeamNames.forEach((name) => {
-              if (!existingLower.has(name.toLowerCase())) {
-                appended.push(name);
-                existingLower.add(name.toLowerCase());
-              }
-            });
-
-            return appended.join('\n');
-          });
+          setTeamNameSuggestions(importedTeamNames);
         }
 
         setMatchSaveStatus({
@@ -1309,6 +1370,7 @@ const LiveScoring = () => {
 
  
   const teams = getFilteredTeams();
+  const sourceTeams = extractTeams(liveData);
   const scoringData = extractScoringData(liveData);
   const booyahTeam = teams.find((team) => isBooyahTeam(team));
   const savedGroupNames = Object.keys(groupDataMap || {})
@@ -1709,21 +1771,50 @@ const LiveScoring = () => {
           )}
         </div>
 
-        {/* Team Names Input Section - NEW */}
+        {/* Team Name Mapping Section */}
         <div className="bg-gradient-to-br from-slate-800/90 via-slate-800/80 to-slate-900/90 rounded-2xl p-6 md:p-8 mb-8 shadow-2xl border border-slate-700/50 backdrop-blur-sm">
-          <label className="block text-slate-200 text-sm font-semibold mb-3">
-            Team Names (one per line)
-          </label>
-          <textarea
-            value={teamNamesInput}
-            onChange={(e) => setTeamNamesInput(e.target.value)}
-            placeholder="Team 1&#10;Team 2&#10;Team 3"
-            rows={6}
-            className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-mono text-sm resize-y"
-          />
-          <p className="text-slate-400 text-xs mt-2">
-            Enter team names, one per line. Teams will be assigned IDs automatically (1, 2, 3...)
-          </p>
+          <div className="mb-4">
+            <p className="text-slate-200 text-sm font-semibold">Team Name Mapping</p>
+            <p className="text-slate-400 text-xs mt-1">
+              Left column shows the team names fetched from the match. Enter your preferred display name on the right.
+            </p>
+          </div>
+          {Array.isArray(sourceTeams) && sourceTeams.length > 0 ? (
+            <div className="space-y-3">
+              {sourceTeams.map((team, index) => {
+                const baseName = resolveTeamBaseName(team, index);
+                const key = normalizeTeamNameKey(baseName);
+                const overrideValue =
+                  key && typeof teamNameOverrides[key] === 'string' ? teamNameOverrides[key] : '';
+
+                return (
+                  <div
+                    key={`${key || 'team'}-${index}`}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-3 items-center"
+                  >
+                    <div className="px-4 py-3 bg-slate-900/70 border-2 border-slate-700 rounded-xl text-slate-200 font-semibold flex items-center justify-between">
+                      <span className="truncate">{baseName}</span>
+                      <span className="text-[10px] uppercase tracking-widest text-slate-500 ml-3">
+                        Fetched
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={overrideValue}
+                      onChange={(e) => handleTeamOverrideChange(baseName, e.target.value)}
+                      placeholder="Custom team name (optional)"
+                      className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-slate-400 text-sm">
+              Fetch match data to automatically load participating teams. You can then add or adjust
+              display names here.
+            </p>
+          )}
         </div>
 
         {/* Input Section */}
