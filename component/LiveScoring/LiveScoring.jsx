@@ -609,6 +609,20 @@ const LiveScoring = () => {
   };
 
   const resolveTeamBaseName = (team, index = 0) => {
+    const preferredCandidates = [
+      team?.original_team_name,
+      team?.originalTeamName,
+      team?.raw?.original_team_name,
+      team?.raw?.team_name,
+      team?.raw?.teamName,
+    ];
+
+    for (const candidate of preferredCandidates) {
+      if (typeof candidate === 'string' && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
     const candidates = [
       team?.team_name,
       team?.teamName,
@@ -712,11 +726,9 @@ const LiveScoring = () => {
   const getFilteredTeams = () => {
     const allTeams = extractTeams(liveData);
 
-    if (!Array.isArray(allTeams) || allTeams.length === 0) {
-      return [];
-    }
+    const normalizedTeams = Array.isArray(allTeams) ? allTeams : [];
 
-    return allTeams.map((team, index) => {
+    const mappedTeams = normalizedTeams.map((team, index) => {
       const baseName = resolveTeamBaseName(team, index);
       const key = normalizeTeamNameKey(baseName);
       const overrideValue =
@@ -737,6 +749,53 @@ const LiveScoring = () => {
         original_team_name: baseName,
       };
     });
+
+    const manualEntries = Object.entries(manualTeamSlots || {})
+      .map(([position, value]) => {
+        const trimmedName = typeof value === 'string' ? value.trim() : '';
+        if (!trimmedName) {
+          return null;
+        }
+
+        const numericPosition = Number(position);
+        const assignedId = Number.isFinite(numericPosition)
+          ? `manual-${numericPosition}`
+          : `manual-${position}`;
+
+        return {
+          position: Number.isFinite(numericPosition) ? numericPosition : mappedTeams.length + 1,
+          data: {
+            assigned_id: assignedId,
+            team_id: assignedId,
+            team_name: trimmedName,
+            original_team_name: trimmedName,
+            manualPlaceholder: true,
+            player_stats: [],
+            kill_count: 0,
+            ranking_score: 0,
+            rank_points: 0,
+            placement_points: 0,
+            position_points: 0,
+            total_points: 0,
+            total_score: 0,
+            points: 0,
+            score: 0,
+            booyah: false,
+          },
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.position - b.position)
+      .map((entry, index) => ({
+        ...entry.data,
+        display_order: entry.position ?? mappedTeams.length + index + 1,
+      }));
+
+    if (!mappedTeams.length && !manualEntries.length) {
+      return [];
+    }
+
+    return [...mappedTeams, ...manualEntries];
   };
 
   // NEW: Helper function to get logo path for a team
@@ -1183,7 +1242,9 @@ const LiveScoring = () => {
 
     const resetTeams =
       Array.isArray(currentTeams) && currentTeams.length > 0
-        ? currentTeams.map((team) => {
+        ? currentTeams
+            .filter((team) => !team?.manualPlaceholder)
+            .map((team) => {
             const resetPlayerStats = Array.isArray(team.player_stats)
               ? team.player_stats.map((player) => {
                   const totalHp =
