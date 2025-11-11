@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 
 const sanitizeGroupName = (name) => {
   if (typeof name !== 'string') return '';
@@ -45,7 +45,131 @@ const incrementMatchLabel = (label) => {
 const buildMatchCompositeKey = (group, round, match) => {
   return [group, round, match].map((value) => sanitizeFileName(value || '')).join('::');
 };
+const extractTeams = (data) => {
+  if (!data) return [];
+
+  if (Array.isArray(data)) {
+    const match = data[0];
+    if (match && match.team_stats && Array.isArray(match.team_stats)) {
+      return match.team_stats;
+    }
+  }
+
+  if (data.team_stats && Array.isArray(data.team_stats)) {
+    return data.team_stats;
+  }
+
+  if (data.match_stats && Array.isArray(data.match_stats)) {
+    const match = data.match_stats[0];
+    if (match && match.team_stats) {
+      return match.team_stats;
+    }
+  }
+
+  return [];
+};
+const normalizeTeamNameKey = (name) => {
+  if (typeof name !== 'string') return '';
+  return name.trim().toLowerCase();
+};
+const resolveTeamBaseName = (team, index = 0) => {
+  const preferredCandidates = [
+    team?.original_team_name,
+    team?.originalTeamName,
+    team?.raw?.original_team_name,
+    team?.raw?.team_name,
+    team?.raw?.teamName,
+  ];
+
+  for (const candidate of preferredCandidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  const candidates = [
+    team?.team_name,
+    team?.teamName,
+    team?.name,
+    team?.display_name,
+    team?.displayName,
+    team?.short_name,
+    team?.shortName,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  const numericId =
+    team?.team_id ?? team?.assigned_id ?? team?.id ?? (Number.isFinite(index) ? index + 1 : null);
+
+  if (numericId !== null && numericId !== undefined) {
+    return `Team ${numericId}`;
+  }
+
+  return `Team ${index + 1}`;
+};
+const ROUND_ROBIN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+const createDefaultRoundRobinConfig = (groupCount = 3, teamsPerGroup = 2) => {
+  const sanitizedGroupCount = Math.max(1, Math.min(Number(groupCount) || 1, ROUND_ROBIN_ALPHABET.length));
+  const sanitizedTeamsPerGroup = Math.max(1, Number(teamsPerGroup) || 1);
+
+  return {
+    groupCount: sanitizedGroupCount,
+    teamsPerGroup: sanitizedTeamsPerGroup,
+    groups: Array.from({ length: sanitizedGroupCount }, (_, index) => ({
+      name: `Group ${ROUND_ROBIN_ALPHABET[index] || index + 1}`,
+      teams: Array.from({ length: sanitizedTeamsPerGroup }, () => ''),
+    })),
+  };
+};
+
+const normalizeRoundRobinConfig = (config) => {
+  if (!config || typeof config !== 'object') {
+    return createDefaultRoundRobinConfig();
+  }
+
+  const desiredGroupCount = Math.max(
+    1,
+    Math.min(Number(config.groupCount) || 1, ROUND_ROBIN_ALPHABET.length)
+  );
+  const desiredTeamsPerGroup = Math.max(1, Number(config.teamsPerGroup) || 1);
+
+  const groups = Array.from({ length: desiredGroupCount }, (_, index) => {
+    const existingGroup = Array.isArray(config.groups) ? config.groups[index] : undefined;
+    const name =
+      existingGroup && typeof existingGroup.name === 'string' && existingGroup.name.trim().length > 0
+        ? existingGroup.name
+        : `Group ${ROUND_ROBIN_ALPHABET[index] || index + 1}`;
+
+    const teams = Array.from({ length: desiredTeamsPerGroup }, (_, teamIndex) => {
+      if (existingGroup && Array.isArray(existingGroup.teams)) {
+        const existingTeam = existingGroup.teams[teamIndex];
+        if (typeof existingTeam === 'string') {
+          return existingTeam;
+        }
+      }
+      return '';
+    });
+
+    return {
+      name,
+      teams,
+    };
+  });
+
+  return {
+    groupCount: desiredGroupCount,
+    teamsPerGroup: desiredTeamsPerGroup,
+    groups,
+  };
+};
 import TeamCard from './TeamCard';
+import TournamentFormatSelector from './TournamentFormatSelector';
 
 const LiveScoring = () => {
   const [matchId, setMatchId] = useState('1986333136274618368');
@@ -77,6 +201,29 @@ const LiveScoring = () => {
   const [roundLabel, setRoundLabel] = useState(DEFAULT_ROUND_LABEL);
   const [matchLabel, setMatchLabel] = useState(DEFAULT_MATCH_LABEL);
   const [manualTeamSlots, setManualTeamSlots] = useState({});
+  const [tournamentFormat, setTournamentFormat] = useState('linear');
+  const [roundRobinConfig, setRoundRobinConfig] = useState(() => createDefaultRoundRobinConfig());
+  const sourceTeams = useMemo(() => extractTeams(liveData), [liveData]);
+  const roundRobinTeamOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+
+    if (roundRobinConfig && Array.isArray(roundRobinConfig.groups)) {
+      roundRobinConfig.groups.forEach((group) => {
+        if (!group || !Array.isArray(group.teams)) return;
+        group.teams.forEach((teamName) => {
+          const sanitized = sanitizeLabel(teamName);
+          if (!sanitized) return;
+          const key = sanitized.toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          options.push(sanitized);
+        });
+      });
+    }
+
+    return options;
+  }, [roundRobinConfig]);
 
   const persistGroupData = useCallback(
     (groupKey, payload) => {
@@ -109,6 +256,14 @@ const LiveScoring = () => {
     },
     [setGroupDataMap]
   );
+
+  const handleTournamentFormatChange = useCallback((nextFormat) => {
+    setTournamentFormat(nextFormat === 'roundRobin' ? 'roundRobin' : 'linear');
+  }, []);
+
+  const handleRoundRobinConfigChange = useCallback((nextConfig) => {
+    setRoundRobinConfig(normalizeRoundRobinConfig(nextConfig));
+  }, []);
 
   const handleActiveGroupChange = useCallback(
     (value) => {
@@ -577,76 +732,6 @@ const LiveScoring = () => {
       }
     }
     return '-';
-  };
-
-  const extractTeams = (data) => {
-    if (!data) return [];
-    
-    if (Array.isArray(data)) {
-      const match = data[0];
-      if (match && match.team_stats && Array.isArray(match.team_stats)) {
-        return match.team_stats;
-      }
-    }
-    
-    if (data.team_stats && Array.isArray(data.team_stats)) {
-      return data.team_stats;
-    }
-    
-    if (data.match_stats && Array.isArray(data.match_stats)) {
-      const match = data.match_stats[0];
-      if (match && match.team_stats) {
-        return match.team_stats;
-      }
-    }
-    
-    return [];
-  };
-
-  const normalizeTeamNameKey = (name) => {
-    if (typeof name !== 'string') return '';
-    return name.trim().toLowerCase();
-  };
-
-  const resolveTeamBaseName = (team, index = 0) => {
-    const preferredCandidates = [
-      team?.original_team_name,
-      team?.originalTeamName,
-      team?.raw?.original_team_name,
-      team?.raw?.team_name,
-      team?.raw?.teamName,
-    ];
-
-    for (const candidate of preferredCandidates) {
-      if (typeof candidate === 'string' && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
-    }
-
-    const candidates = [
-      team?.team_name,
-      team?.teamName,
-      team?.name,
-      team?.display_name,
-      team?.displayName,
-      team?.short_name,
-      team?.shortName,
-    ];
-
-    for (const candidate of candidates) {
-      if (typeof candidate === 'string' && candidate.trim().length > 0) {
-        return candidate.trim();
-      }
-    }
-
-    const numericId =
-      team?.team_id ?? team?.assigned_id ?? team?.id ?? (Number.isFinite(index) ? index + 1 : null);
-
-    if (numericId !== null && numericId !== undefined) {
-      return `Team ${numericId}`;
-    }
-
-    return `Team ${index + 1}`;
   };
 
   useEffect(() => {
@@ -1455,7 +1540,6 @@ const LiveScoring = () => {
 
  
   const teams = getFilteredTeams();
-  const sourceTeams = extractTeams(liveData);
   const scoringData = extractScoringData(liveData);
   const booyahTeam = teams.find((team) => isBooyahTeam(team));
   const savedGroupNames = Object.keys(groupDataMap || {})
@@ -1483,6 +1567,45 @@ const LiveScoring = () => {
     .filter(Boolean)
     .join('_');
  
+  const shouldUseRoundRobinSelectors =
+    tournamentFormat === 'roundRobin' &&
+    Array.isArray(roundRobinTeamOptions) &&
+    roundRobinTeamOptions.length > 0;
+
+  const renderTeamNameControl = (value, onChange, placeholder = '', inputClassName = '') => {
+    if (!shouldUseRoundRobinSelectors) {
+      return (
+        <input
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          className={`w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold ${inputClassName}`}
+        />
+      );
+    }
+
+    const options = [...roundRobinTeamOptions];
+    if (typeof value === 'string' && value.trim().length > 0 && !options.includes(value)) {
+      options.unshift(value);
+    }
+
+    return (
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={`w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold ${inputClassName}`}
+      >
+        <option value="">Select team</option>
+        {options.map((option) => (
+          <option key={`round-robin-option-${option}`} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4 md:p-8 relative overflow-hidden">
       {/* Animated background elements */}
@@ -1502,6 +1625,30 @@ const LiveScoring = () => {
             <div className="h-1.5 bg-gradient-to-r from-blue-500 via-cyan-500 to-purple-500 rounded-full mx-auto w-32"></div>
           </div>
           <p className="text-slate-400 text-lg font-medium">Live Scoring System • Real-time match statistics</p>
+        </div>
+
+        <div className="bg-gradient-to-br from-slate-800/90 via-slate-800/80 to-slate-900/90 rounded-2xl p-6 md:p-8 mb-8 shadow-2xl border border-slate-700/50 backdrop-blur-sm">
+          <h3 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-300 via-cyan-300 to-purple-300 mb-4">
+            🎯 Tournament Format
+          </h3>
+          <TournamentFormatSelector
+            format={tournamentFormat}
+            onFormatChange={handleTournamentFormatChange}
+            roundRobinConfig={roundRobinConfig}
+            onRoundRobinConfigChange={handleRoundRobinConfigChange}
+          />
+          {tournamentFormat === 'roundRobin' && (
+            <div className="mt-5 rounded-xl border border-blue-500/40 bg-blue-900/20 px-4 py-3 text-slate-200 text-sm">
+              <p className="font-semibold">
+                {roundRobinConfig.groupCount} group
+                {roundRobinConfig.groupCount === 1 ? '' : 's'} • {roundRobinConfig.teamsPerGroup} team
+                {roundRobinConfig.teamsPerGroup === 1 ? '' : 's'} per group
+              </p>
+              <p className="text-slate-300 text-xs mt-1">
+                Total slots: {roundRobinConfig.groupCount * roundRobinConfig.teamsPerGroup}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* NEW: JSON File Path Section */}
@@ -1883,13 +2030,11 @@ const LiveScoring = () => {
                         Fetched
                       </span>
                     </div>
-                    <input
-                      type="text"
-                      value={overrideValue}
-                      onChange={(e) => handleTeamOverrideChange(baseName, e.target.value)}
-                      placeholder="Custom team name (optional)"
-                      className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold"
-                    />
+                    {renderTeamNameControl(
+                      overrideValue,
+                      (nextValue) => handleTeamOverrideChange(baseName, nextValue),
+                      shouldUseRoundRobinSelectors ? 'Select team' : 'Custom team name (optional)'
+                    )}
                   </div>
                 );
               })
@@ -1918,13 +2063,11 @@ const LiveScoring = () => {
                         Manual
                       </span>
                     </div>
-                    <input
-                      type="text"
-                      value={currentValue}
-                      onChange={(e) => handleManualTeamSlotChange(position, e.target.value)}
-                      placeholder={`Team ${position} name (optional)`}
-                      className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold"
-                    />
+                    {renderTeamNameControl(
+                      currentValue,
+                      (nextValue) => handleManualTeamSlotChange(position, nextValue),
+                      shouldUseRoundRobinSelectors ? 'Select team' : `Team ${position} name (optional)`
+                    )}
                   </div>
                 );
               });
