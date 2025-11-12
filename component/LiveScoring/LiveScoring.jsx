@@ -240,6 +240,7 @@ const LiveScoring = () => {
   const [cumulativeScores, setCumulativeScores] = useState({});
   const [matchHistory, setMatchHistory] = useState([]);
   const [eliminationHistory, setEliminationHistory] = useState([]);
+  const [currentEliminationEntry, setCurrentEliminationEntry] = useState(null);
   const [matchSaveStatus, setMatchSaveStatus] = useState(null);
   const [groupName, setGroupName] = useState(DEFAULT_GROUP_NAME);
   const [groupDataMap, setGroupDataMap] = useState(() => ({
@@ -258,7 +259,11 @@ const LiveScoring = () => {
   const [configTransferStatus, setConfigTransferStatus] = useState(null);
   const configFileInputRef = useRef(null);
   const eliminatedTeamKeysRef = useRef(new Set());
-  const eliminationAnimationTimeoutRef = useRef(null);
+  const eliminationAnimationQueueRef = useRef([]);
+  const eliminationAnimationProcessingRef = useRef(false);
+  const eliminationAnimationTimeoutsRef = useRef(new Set());
+  const isComponentMountedRef = useRef(true);
+  const booyahAchievedRef = useRef(false);
   const sourceTeams = useMemo(() => extractTeams(liveData), [liveData]);
   const roundRobinTeamOptions = useMemo(() => {
     const seen = new Set();
@@ -928,36 +933,133 @@ const LiveScoring = () => {
     [eliminationImageBasePath]
   );
 
-  const triggerEliminationAnimation = useCallback(async () => {
-    const rawHost = typeof vmixHost === 'string' ? vmixHost.trim() : '';
-    if (!rawHost) {
+  const waitFor = useCallback((ms) => {
+    if (ms <= 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        eliminationAnimationTimeoutsRef.current.delete(timeoutId);
+        resolve();
+      }, ms);
+      eliminationAnimationTimeoutsRef.current.add(timeoutId);
+    });
+  }, []);
+
+  const processEliminationAnimationQueue = useCallback(async () => {
+    if (eliminationAnimationProcessingRef.current) {
       return;
     }
 
+    if (!eliminationAnimationQueueRef.current.length || booyahAchievedRef.current) {
+      return;
+    }
+
+    eliminationAnimationProcessingRef.current = true;
+
+    const rawHost = typeof vmixHost === 'string' ? vmixHost.trim() : '';
     const hasProtocol = /^https?:\/\//i.test(rawHost);
-    const baseUrl = (hasProtocol ? rawHost : `http://${rawHost}`).replace(/\/+$/, '');
-    const transitionInUrl = `${baseUrl}/api/?Function=TitleBeginAnimation&Input=ELIM&Value=TransitionIn`;
-    const transitionOutUrl = `${baseUrl}/api/?Function=TitleBeginAnimation&Input=ELIM&Value=TransitionOut`;
+    const baseUrl = rawHost ? (hasProtocol ? rawHost : `http://${rawHost}`).replace(/\/+$/, '') : '';
+    const transitionInUrl = baseUrl
+      ? `${baseUrl}/api/?Function=TitleBeginAnimation&Input=ELIM&Value=TransitionIn`
+      : null;
+    const transitionOutUrl = baseUrl
+      ? `${baseUrl}/api/?Function=TitleBeginAnimation&Input=ELIM&Value=TransitionOut`
+      : null;
 
-    try {
-      await fetch(transitionInUrl, { method: 'GET' });
-    } catch (err) {
-      console.error('Failed to trigger vMix TransitionIn animation:', err);
+    while (
+      isComponentMountedRef.current &&
+      eliminationAnimationQueueRef.current.length > 0 &&
+      !booyahAchievedRef.current
+    ) {
+      const nextEntry = eliminationAnimationQueueRef.current.shift();
+      if (!nextEntry) {
+        continue;
+      }
+
+      if (!isComponentMountedRef.current) {
+        break;
+      }
+
+      setCurrentEliminationEntry(nextEntry);
+
+      if (transitionInUrl && !booyahAchievedRef.current) {
+        try {
+          await fetch(transitionInUrl, { method: 'GET' });
+        } catch (err) {
+          console.error('Failed to trigger vMix TransitionIn animation:', err);
+        }
+      }
+
+      await waitFor(2000);
+
+      if (booyahAchievedRef.current || !isComponentMountedRef.current) {
+        setCurrentEliminationEntry(null);
+        break;
+      }
+
+      if (transitionOutUrl && !booyahAchievedRef.current) {
+        try {
+          await fetch(transitionOutUrl, { method: 'GET' });
+        } catch (err) {
+          console.error('Failed to trigger vMix TransitionOut animation:', err);
+        }
+      }
+
+      await waitFor(2000);
+
+      setCurrentEliminationEntry(null);
+
+      if (booyahAchievedRef.current || !isComponentMountedRef.current) {
+        break;
+      }
     }
 
-    if (eliminationAnimationTimeoutRef.current) {
-      clearTimeout(eliminationAnimationTimeoutRef.current);
+    if (booyahAchievedRef.current) {
+      setCurrentEliminationEntry(null);
     }
 
-    eliminationAnimationTimeoutRef.current = setTimeout(() => {
-      fetch(transitionOutUrl, { method: 'GET' }).catch((err) => {
-        console.error('Failed to trigger vMix TransitionOut animation:', err);
-      });
-    }, 2000);
-  }, [vmixHost]);
+    eliminationAnimationProcessingRef.current = false;
+
+    if (
+      isComponentMountedRef.current &&
+      eliminationAnimationQueueRef.current.length > 0 &&
+      !booyahAchievedRef.current
+    ) {
+      processEliminationAnimationQueue();
+    }
+  }, [vmixHost, waitFor]);
+
+  const clearPendingEliminationAnimations = useCallback(() => {
+    eliminationAnimationQueueRef.current = [];
+    eliminationAnimationTimeoutsRef.current.forEach((timeoutId) => {
+      clearTimeout(timeoutId);
+    });
+    eliminationAnimationTimeoutsRef.current.clear();
+    eliminationAnimationProcessingRef.current = false;
+    setCurrentEliminationEntry(null);
+  }, []);
+
+  const enqueueEliminationAnimation = useCallback(
+    (entry) => {
+      if (booyahAchievedRef.current) {
+        return;
+      }
+
+      eliminationAnimationQueueRef.current.push(entry);
+      if (!eliminationAnimationProcessingRef.current) {
+        processEliminationAnimationQueue();
+      }
+    },
+    [processEliminationAnimationQueue]
+  );
 
   const handleTeamElimination = useCallback(
     (team, totalTeams) => {
+      if (booyahAchievedRef.current) {
+        return;
+      }
+
       const eliminationKey = getTeamEliminationKey(team);
       if (!eliminationKey || eliminatedTeamKeysRef.current.has(eliminationKey)) {
         return;
@@ -975,29 +1077,26 @@ const LiveScoring = () => {
         teamSnapshot = { ...team };
       }
 
-      setEliminationHistory((prev) => [
-        ...prev,
-        {
-          key: eliminationKey,
-          eliminationRank,
-          totalTeamsAtElimination: totalTeams,
-          eliminatedAt: Date.now(),
-          teamSnapshot,
-        },
-      ]);
+      const eliminationEntry = {
+        key: eliminationKey,
+        eliminationRank,
+        totalTeamsAtElimination: totalTeams,
+        eliminatedAt: Date.now(),
+        teamSnapshot,
+      };
 
-      triggerEliminationAnimation();
+      setEliminationHistory((prev) => [...prev, eliminationEntry]);
+      enqueueEliminationAnimation(eliminationEntry);
     },
-    [getTeamEliminationKey, triggerEliminationAnimation]
+    [getTeamEliminationKey, enqueueEliminationAnimation]
   );
 
   useEffect(() => {
     return () => {
-      if (eliminationAnimationTimeoutRef.current) {
-        clearTimeout(eliminationAnimationTimeoutRef.current);
-      }
+      isComponentMountedRef.current = false;
+      clearPendingEliminationAnimations();
     };
-  }, []);
+  }, [clearPendingEliminationAnimations]);
 
   useEffect(() => {
     const teams = getFilteredTeams();
@@ -1512,8 +1611,7 @@ const LiveScoring = () => {
       });
     });
 
-    const latestEliminationEntry =
-      eliminationHistory.length > 0 ? eliminationHistory[eliminationHistory.length - 1] : null;
+    const latestEliminationEntry = currentEliminationEntry;
 
     if (latestEliminationEntry) {
       const eliminationKey = latestEliminationEntry.key;
@@ -1651,6 +1749,7 @@ const LiveScoring = () => {
     zoneInImage,
     zoneOutImage,
     eliminationHistory,
+    currentEliminationEntry,
   ]);
 
   // Helper function to extract players/teams from data
@@ -2564,6 +2663,17 @@ const LiveScoring = () => {
   const teams = getFilteredTeams();
   const scoringData = extractScoringData(liveData);
   const booyahTeam = teams.find((team) => isBooyahTeam(team));
+  useEffect(() => {
+    const hasBooyah = Boolean(booyahTeam);
+    if (hasBooyah) {
+      if (!booyahAchievedRef.current) {
+        booyahAchievedRef.current = true;
+        clearPendingEliminationAnimations();
+      }
+    } else if (booyahAchievedRef.current) {
+      booyahAchievedRef.current = false;
+    }
+  }, [booyahTeam, clearPendingEliminationAnimations]);
   const isRoundRobinFormat = tournamentFormat === 'roundRobin';
   const isGroupWiseJson =
     jsonGroupingMode === 'group' && isRoundRobinFormat && activeRoundRobinGroups.length > 0;
