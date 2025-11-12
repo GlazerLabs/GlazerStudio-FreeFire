@@ -41,11 +41,28 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
       const teams = Array.from({ length: teamsPerGroup }, (_, teamIndex) => {
         if (existingGroup && Array.isArray(existingGroup.teams)) {
           const existingTeam = existingGroup.teams[teamIndex];
+          if (existingTeam && typeof existingTeam === 'object') {
+            return {
+              shortName:
+                typeof existingTeam.shortName === 'string'
+                  ? existingTeam.shortName
+                  : typeof existingTeam.name === 'string'
+                  ? existingTeam.name
+                  : '',
+              fullName: typeof existingTeam.fullName === 'string' ? existingTeam.fullName : '',
+            };
+          }
           if (typeof existingTeam === 'string') {
-            return existingTeam;
+            return {
+              shortName: existingTeam,
+              fullName: '',
+            };
           }
         }
-        return '';
+        return {
+          shortName: '',
+          fullName: '',
+        };
       });
 
       const enabled =
@@ -87,11 +104,28 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
       const teams = Array.from({ length: safeConfig.teamsPerGroup }, (_, teamIndex) => {
         if (existingGroup && Array.isArray(existingGroup.teams)) {
           const existingTeam = existingGroup.teams[teamIndex];
+          if (existingTeam && typeof existingTeam === 'object') {
+            return {
+              shortName:
+                typeof existingTeam.shortName === 'string'
+                  ? existingTeam.shortName
+                  : typeof existingTeam.name === 'string'
+                  ? existingTeam.name
+                  : '',
+              fullName: typeof existingTeam.fullName === 'string' ? existingTeam.fullName : '',
+            };
+          }
           if (typeof existingTeam === 'string') {
-            return existingTeam;
+            return {
+              shortName: existingTeam,
+              fullName: '',
+            };
           }
         }
-        return '';
+        return {
+          shortName: '',
+          fullName: '',
+        };
       });
 
       const enabled =
@@ -119,11 +153,28 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
       const teams = Array.from({ length: nextTeamsPerGroup }, (_, teamIndex) => {
         if (Array.isArray(group.teams)) {
           const existingTeam = group.teams[teamIndex];
+          if (existingTeam && typeof existingTeam === 'object') {
+            return {
+              shortName:
+                typeof existingTeam.shortName === 'string'
+                  ? existingTeam.shortName
+                  : typeof existingTeam.name === 'string'
+                  ? existingTeam.name
+                  : '',
+              fullName: typeof existingTeam.fullName === 'string' ? existingTeam.fullName : '',
+            };
+          }
           if (typeof existingTeam === 'string') {
-            return existingTeam;
+            return {
+              shortName: existingTeam,
+              fullName: '',
+            };
           }
         }
-        return '';
+        return {
+          shortName: '',
+          fullName: '',
+        };
       });
 
       return {
@@ -131,6 +182,14 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
         teams,
       };
     });
+
+    emitConfigUpdate({
+      groupCount: safeConfig.groupCount,
+      teamsPerGroup: nextTeamsPerGroup,
+      groups,
+    });
+  };
+
   const handleGroupEnabledToggle = (groupIndex, checked) => {
     const groups = safeConfig.groups.map((group, index) =>
       index === groupIndex
@@ -144,14 +203,6 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
     emitConfigUpdate({
       groupCount: safeConfig.groupCount,
       teamsPerGroup: safeConfig.teamsPerGroup,
-      groups,
-    });
-  };
-
-
-    emitConfigUpdate({
-      groupCount: safeConfig.groupCount,
-      teamsPerGroup: nextTeamsPerGroup,
       groups,
     });
   };
@@ -173,23 +224,81 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
     });
   };
 
-  const handleTeamNameChange = (groupIndex, teamIndex, value) => {
-    const groups = safeConfig.groups.map((group, index) => {
-      if (index !== groupIndex) {
-        return group;
-      }
+  const getGroupTeamsFieldText = (group, field) => {
+    if (!group || !Array.isArray(group.teams)) {
+      return '';
+    }
+    return group.teams
+      .map((team) => {
+        if (team && typeof team === 'object') {
+          if (field === 'shortName') {
+            return team.shortName || '';
+          }
+          if (field === 'fullName') {
+            return team.fullName || '';
+          }
+          return '';
+        }
+        if (typeof team === 'string') {
+          return field === 'shortName' ? team : '';
+        }
+        return '';
+      })
+      .join('\n');
+  };
 
-      const teams = group.teams.map((team, innerIndex) => (innerIndex === teamIndex ? value : team));
+  const handleGroupTeamListChange = (groupIndex, field, value) => {
+    const parseLines = (text) =>
+      text
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((line) => line.trim());
 
-      return {
-        ...group,
-        teams,
-      };
-    });
+    const baseGroup = safeConfig.groups[groupIndex] || { teams: [] };
+    const existingShort = Array.isArray(baseGroup.teams)
+      ? baseGroup.teams.map((team) =>
+          team && typeof team === 'object'
+            ? team.shortName || ''
+            : typeof team === 'string'
+            ? team
+            : ''
+        )
+      : [];
+    const existingFull = Array.isArray(baseGroup.teams)
+      ? baseGroup.teams.map((team) =>
+          team && typeof team === 'object'
+            ? team.fullName || ''
+            : ''
+        )
+      : [];
+
+    const updatedShort = field === 'shortName' ? parseLines(value) : existingShort;
+    const updatedFull = field === 'fullName' ? parseLines(value) : existingFull;
+
+    const maxLength = Math.max(
+      safeConfig.teamsPerGroup,
+      baseGroup.teams?.length || 0,
+      updatedShort.length,
+      updatedFull.length
+    );
+
+    const teams = Array.from({ length: maxLength }, (_, index) => ({
+      shortName: updatedShort[index] ?? '',
+      fullName: updatedFull[index] ?? '',
+    }));
+
+    const groups = safeConfig.groups.map((group, index) =>
+      index === groupIndex
+        ? {
+            ...group,
+            teams,
+          }
+        : group
+    );
 
     emitConfigUpdate({
       groupCount: safeConfig.groupCount,
-      teamsPerGroup: safeConfig.teamsPerGroup,
+      teamsPerGroup: Math.max(safeConfig.teamsPerGroup, maxLength),
       groups,
     });
   };
@@ -271,21 +380,29 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
                   className="w-full px-4 py-2.5 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
                 />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {group.teams.map((teamName, teamIndex) => (
-                  <div key={`round-robin-group-${groupIndex}-team-${teamIndex}`}>
-                    <label className="block text-slate-400 text-xs font-semibold mb-1">
-                      Team {teamIndex + 1}
-                    </label>
-                    <input
-                      type="text"
-                      value={teamName}
-                      onChange={(event) => handleTeamNameChange(groupIndex, teamIndex, event.target.value)}
-                      placeholder={`Team ${teamIndex + 1}`}
-                      className="w-full px-4 py-2.5 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
-                    />
-                  </div>
-                ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-200 text-xs font-semibold uppercase tracking-wider mb-2">
+                    Team names (short)
+                  </label>
+                  <textarea
+                    value={getGroupTeamsFieldText(group, 'shortName')}
+                    onChange={(event) => handleGroupTeamListChange(groupIndex, 'shortName', event.target.value)}
+                    placeholder={`Team 1\nTeam 2\nTeam 3`}
+                    className="w-full h-40 px-4 py-3 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-200 text-xs font-semibold uppercase tracking-wider mb-2">
+                    Full team names
+                  </label>
+                  <textarea
+                    value={getGroupTeamsFieldText(group, 'fullName')}
+                    onChange={(event) => handleGroupTeamListChange(groupIndex, 'fullName', event.target.value)}
+                    placeholder={`Team ABC 1\nTeam DHDH\nTeam DJJD`}
+                    className="w-full h-40 px-4 py-3 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm resize-none"
+                  />
+                </div>
               </div>
             </div>
           ))}

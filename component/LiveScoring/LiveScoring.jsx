@@ -156,6 +156,37 @@ const resolveTeamBaseName = (team, index = 0) => {
 
   return `Team ${index + 1}`;
 };
+const resolveTeamShortName = (team, index = 0) => {
+  const shortCandidates = [
+    team?.short_name,
+    team?.shortName,
+    team?.team_code,
+    team?.teamCode,
+    team?.abbreviation,
+    team?.abbr,
+    team?.tag,
+  ];
+
+  for (const candidate of shortCandidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  const fallbackCandidates = [
+    team?.team_name,
+    team?.teamName,
+    team?.name,
+  ];
+
+  for (const candidate of fallbackCandidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+
+  return `Team ${Number.isFinite(index) ? index + 1 : index || 1}`;
+};
 const ROUND_ROBIN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const UNASSIGNED_GROUP_KEY = '__unassigned__';
 
@@ -168,7 +199,10 @@ const createDefaultRoundRobinConfig = (groupCount = 3, teamsPerGroup = 2) => {
     teamsPerGroup: sanitizedTeamsPerGroup,
     groups: Array.from({ length: sanitizedGroupCount }, (_, index) => ({
       name: `Group ${ROUND_ROBIN_ALPHABET[index] || index + 1}`,
-      teams: Array.from({ length: sanitizedTeamsPerGroup }, () => ''),
+      teams: Array.from({ length: sanitizedTeamsPerGroup }, () => ({
+        shortName: '',
+        fullName: '',
+      })),
       enabled: true,
     })),
   };
@@ -195,11 +229,31 @@ const normalizeRoundRobinConfig = (config) => {
     const teams = Array.from({ length: desiredTeamsPerGroup }, (_, teamIndex) => {
       if (existingGroup && Array.isArray(existingGroup.teams)) {
         const existingTeam = existingGroup.teams[teamIndex];
+        if (existingTeam && typeof existingTeam === 'object') {
+          const shortName =
+            typeof existingTeam.shortName === 'string' ? existingTeam.shortName.trim() : typeof existingTeam.name === 'string' ? existingTeam.name.trim() : typeof existingTeam.teamName === 'string' ? existingTeam.teamName.trim() : '';
+          const fullName =
+            typeof existingTeam.fullName === 'string'
+              ? existingTeam.fullName.trim()
+              : typeof existingTeam.displayName === 'string'
+              ? existingTeam.displayName.trim()
+              : '';
+          return {
+            shortName,
+            fullName,
+          };
+        }
         if (typeof existingTeam === 'string') {
-          return existingTeam;
+          return {
+            shortName: existingTeam.trim(),
+            fullName: '',
+          };
         }
       }
-      return '';
+      return {
+        shortName: '',
+        fullName: '',
+      };
     });
 
     return {
@@ -226,7 +280,10 @@ const LiveScoring = () => {
   const [error, setError] = useState(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [teamNameOverrides, setTeamNameOverrides] = useState({});
+  const [teamShortNameOverrides, setTeamShortNameOverrides] = useState({});
   const [teamNameSuggestions, setTeamNameSuggestions] = useState([]);
+  const [customShortNamesInput, setCustomShortNamesInput] = useState('');
+  const [customFullNamesInput, setCustomFullNamesInput] = useState('');
   const [jsonFilePath, setJsonFilePath] = useState(''); // File path state
   const [jsonWriteStatus, setJsonWriteStatus] = useState(null); // Status for JSON writing
   const [jsonGroupingMode, setJsonGroupingMode] = useState('overall');
@@ -269,19 +326,35 @@ const LiveScoring = () => {
     const seen = new Set();
     const options = [];
 
+    const pushOption = (value) => {
+      if (typeof value !== 'string') return;
+      const sanitized = sanitizeLabel(value);
+      if (!sanitized) return;
+      const key = sanitized.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push(sanitized);
+    };
+
     if (roundRobinConfig && Array.isArray(roundRobinConfig.groups)) {
       roundRobinConfig.groups.forEach((group) => {
         if (group && group.enabled === false) {
           return;
         }
         if (!group || !Array.isArray(group.teams)) return;
-        group.teams.forEach((teamName) => {
-          const sanitized = sanitizeLabel(teamName);
-          if (!sanitized) return;
-          const key = sanitized.toLowerCase();
-          if (seen.has(key)) return;
-          seen.add(key);
-          options.push(sanitized);
+        group.teams.forEach((teamEntry) => {
+          if (teamEntry && typeof teamEntry === 'object') {
+            const shortName = typeof teamEntry.shortName === 'string' ? teamEntry.shortName.trim() : '';
+            const fullName = typeof teamEntry.fullName === 'string' ? teamEntry.fullName.trim() : '';
+            if (shortName) {
+              pushOption(shortName);
+            }
+            if (fullName && fullName !== shortName) {
+              pushOption(fullName);
+            }
+          } else {
+            pushOption(teamEntry);
+          }
         });
       });
     }
@@ -329,13 +402,26 @@ const LiveScoring = () => {
     const map = new Map();
 
     activeRoundRobinGroups.forEach((group) => {
-      group.teams.forEach((teamName) => {
-        if (typeof teamName !== 'string' || !teamName.trim()) return;
-        const teamKey = normalizeTeamNameKey(teamName);
-        if (!teamKey) return;
-        map.set(teamKey, {
-          label: group.label,
-          key: group.key,
+      group.teams.forEach((teamEntry) => {
+        const names = [];
+        if (teamEntry && typeof teamEntry === 'object') {
+          if (typeof teamEntry.shortName === 'string') {
+            names.push(teamEntry.shortName);
+          }
+          if (typeof teamEntry.fullName === 'string') {
+            names.push(teamEntry.fullName);
+          }
+        } else if (typeof teamEntry === 'string') {
+          names.push(teamEntry);
+        }
+        names.forEach((name) => {
+          if (typeof name !== 'string' || !name.trim()) return;
+          const teamKey = normalizeTeamNameKey(name);
+          if (!teamKey) return;
+          map.set(teamKey, {
+            label: group.label,
+            key: group.key,
+          });
         });
       });
     });
@@ -508,6 +594,9 @@ const LiveScoring = () => {
         matchLabel,
         groupDataMap,
         teamNameOverrides,
+        teamShortNameOverrides,
+        customShortNamesInput,
+        customFullNamesInput,
         manualTeamSlots,
         cumulativeScores,
         matchHistory,
@@ -549,6 +638,9 @@ const LiveScoring = () => {
     matchLabel,
     groupDataMap,
     teamNameOverrides,
+    teamShortNameOverrides,
+    customShortNamesInput,
+    customFullNamesInput,
     manualTeamSlots,
     cumulativeScores,
     matchHistory,
@@ -617,12 +709,24 @@ const LiveScoring = () => {
         setTeamNameOverrides(parsed.teamNameOverrides);
       }
 
+      if (parsed.teamShortNameOverrides && typeof parsed.teamShortNameOverrides === 'object') {
+        setTeamShortNameOverrides(parsed.teamShortNameOverrides);
+      }
+
       if (parsed.manualTeamSlots && typeof parsed.manualTeamSlots === 'object') {
         setManualTeamSlots(parsed.manualTeamSlots);
       }
 
       if (Array.isArray(parsed.teamNameSuggestions)) {
         setTeamNameSuggestions(parsed.teamNameSuggestions);
+      }
+
+      if (typeof parsed.customShortNamesInput === 'string') {
+        setCustomShortNamesInput(parsed.customShortNamesInput);
+      }
+
+      if (typeof parsed.customFullNamesInput === 'string') {
+        setCustomFullNamesInput(parsed.customFullNamesInput);
       }
 
       const importedGroupName = sanitizeGroupName(parsed.groupName) || DEFAULT_GROUP_NAME;
@@ -983,7 +1087,10 @@ const LiveScoring = () => {
 
       setCurrentEliminationEntry(nextEntry);
 
+      let transitionInTriggered = false;
+
       if (transitionInUrl && !booyahAchievedRef.current) {
+        transitionInTriggered = true;
         try {
           await fetch(transitionInUrl, { method: 'GET' });
         } catch (err) {
@@ -993,17 +1100,17 @@ const LiveScoring = () => {
 
       await waitFor(2000);
 
-      if (booyahAchievedRef.current || !isComponentMountedRef.current) {
-        setCurrentEliminationEntry(null);
-        break;
-      }
-
-      if (transitionOutUrl && !booyahAchievedRef.current) {
+      if (transitionOutUrl && (transitionInTriggered || !booyahAchievedRef.current)) {
         try {
           await fetch(transitionOutUrl, { method: 'GET' });
         } catch (err) {
           console.error('Failed to trigger vMix TransitionOut animation:', err);
         }
+      }
+
+      if (booyahAchievedRef.current || !isComponentMountedRef.current) {
+        setCurrentEliminationEntry(null);
+        break;
       }
 
       await waitFor(2000);
@@ -1113,6 +1220,7 @@ const LiveScoring = () => {
   }, [
     liveData,
     teamNameOverrides,
+    teamShortNameOverrides,
     manualTeamSlots,
     roundRobinConfig,
     isTeamEliminated,
@@ -1812,6 +1920,61 @@ const LiveScoring = () => {
       return;
     }
 
+    setTeamShortNameOverrides((prev) => {
+      const next = {};
+
+      allTeams.forEach((team, index) => {
+        const baseName = resolveTeamBaseName(team, index);
+        const key = normalizeTeamNameKey(baseName);
+        if (!key) return;
+
+        const existing = typeof prev?.[key] === 'string' ? prev[key].trim() : '';
+        if (existing) {
+          next[key] = existing;
+          return;
+        }
+
+        const suggestion =
+          Array.isArray(teamNameSuggestions) && typeof teamNameSuggestions[index] === 'string'
+            ? teamNameSuggestions[index].trim()
+            : '';
+        const resolvedShort = resolveTeamShortName(team, index);
+        const fallback = suggestion || resolvedShort || baseName;
+
+        next[key] = fallback;
+      });
+
+      Object.entries(prev || {}).forEach(([key, value]) => {
+        if (!Object.prototype.hasOwnProperty.call(next, key) && key.startsWith('manual-slot-')) {
+          next[key] = value;
+        }
+      });
+
+      const prevKeys = Object.keys(prev || {});
+      const nextKeys = Object.keys(next);
+
+      if (
+        prevKeys.length === nextKeys.length &&
+        prevKeys.every((key) => Object.prototype.hasOwnProperty.call(next, key) && prev[key] === next[key])
+      ) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [liveData, teamNameSuggestions]);
+
+  useEffect(() => {
+    if (!liveData) {
+      return;
+    }
+
+    const allTeams = extractTeams(liveData);
+
+    if (!Array.isArray(allTeams) || allTeams.length === 0) {
+      return;
+    }
+
     setTeamNameOverrides((prev) => {
       const next = {};
 
@@ -1863,6 +2026,23 @@ const LiveScoring = () => {
     });
   };
 
+  const handleTeamShortNameChange = (baseName, value) => {
+    const key = normalizeTeamNameKey(baseName);
+    if (!key) return;
+
+    const nextValue = typeof value === 'string' ? value : '';
+
+    setTeamShortNameOverrides((prev) => {
+      if (prev?.[key] === nextValue) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [key]: nextValue,
+      };
+    });
+  };
+
   const handleManualTeamSlotChange = (position, value) => {
     setManualTeamSlots((prev) => {
       if (prev[position] === value) {
@@ -1885,10 +2065,29 @@ const LiveScoring = () => {
       const key = normalizeTeamNameKey(baseName);
       const overrideValue =
         key && typeof teamNameOverrides[key] === 'string' ? teamNameOverrides[key] : '';
+      const shortOverride =
+        key && typeof teamShortNameOverrides?.[key] === 'string' ? teamShortNameOverrides[key] : '';
       const finalName =
         typeof overrideValue === 'string' && overrideValue.trim().length > 0
           ? overrideValue.trim()
           : baseName;
+      const existingShort =
+        (typeof team?.short_name === 'string' && team.short_name.trim().length > 0
+          ? team.short_name.trim()
+          : null) ??
+        (typeof team?.shortName === 'string' && team.shortName.trim().length > 0
+          ? team.shortName.trim()
+          : null);
+      const resolvedShortName = (() => {
+        const trimmedOverride = typeof shortOverride === 'string' ? shortOverride.trim() : '';
+        if (trimmedOverride) {
+          return trimmedOverride;
+        }
+        if (existingShort) {
+          return existingShort;
+        }
+        return resolveTeamShortName(team, index) || baseName;
+      })();
 
       return {
         ...team,
@@ -1899,6 +2098,8 @@ const LiveScoring = () => {
           (Number.isFinite(index) ? index + 1 : undefined),
         team_name: finalName,
         original_team_name: baseName,
+        short_name: resolvedShortName,
+        shortName: resolvedShortName,
       };
     });
 
@@ -1913,6 +2114,12 @@ const LiveScoring = () => {
         const assignedId = Number.isFinite(numericPosition)
           ? `manual-${numericPosition}`
           : `manual-${position}`;
+        const manualBaseKey = `manual-slot-${position}`;
+        const manualShortOverride =
+          typeof teamShortNameOverrides?.[manualBaseKey] === 'string'
+            ? teamShortNameOverrides[manualBaseKey].trim()
+            : '';
+        const manualShortName = manualShortOverride || trimmedName;
 
         return {
           position: Number.isFinite(numericPosition) ? numericPosition : mappedTeams.length + 1,
@@ -1921,6 +2128,8 @@ const LiveScoring = () => {
             team_id: assignedId,
             team_name: trimmedName,
             original_team_name: trimmedName,
+            short_name: manualShortName,
+            shortName: manualShortName,
             manualPlaceholder: true,
             player_stats: [],
             kill_count: 0,
@@ -2899,39 +3108,262 @@ const LiveScoring = () => {
     Array.isArray(roundRobinTeamOptions) &&
     roundRobinTeamOptions.length > 0;
 
-  const renderTeamNameControl = (value, onChange, placeholder = '', inputClassName = '') => {
-    if (!shouldUseRoundRobinSelectors) {
+  const customNamePairs = useMemo(() => {
+    const shortLines = customShortNamesInput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const fullLines = customFullNamesInput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const maxLength = Math.max(shortLines.length, fullLines.length);
+    const pairs = [];
+
+    for (let index = 0; index < maxLength; index += 1) {
+      const shortName = shortLines[index] || '';
+      const fullName = fullLines[index] || '';
+      if (!shortName.trim()) {
+        continue;
+      }
+      pairs.push({
+        shortName,
+        fullName,
+      });
+    }
+
+    return pairs;
+  }, [customShortNamesInput, customFullNamesInput]);
+
+  const customShortToFullMap = useMemo(() => {
+    const map = {};
+    customNamePairs.forEach(({ shortName, fullName }) => {
+      if (typeof shortName === 'string' && shortName.trim()) {
+        const trimmedShort = shortName.trim();
+        const trimmedFull = typeof fullName === 'string' ? fullName.trim() : '';
+        map[trimmedShort] = trimmedFull;
+        map[trimmedShort.toLowerCase()] = trimmedFull;
+      }
+    });
+    return map;
+  }, [customNamePairs]);
+
+  const linearShortNameOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+
+    const addOption = (value) => {
+      if (typeof value !== 'string') return;
+      const trimmed = value.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      options.push(trimmed);
+    };
+
+    customNamePairs.forEach(({ shortName }) => addOption(shortName));
+
+    return options.sort((a, b) => a.localeCompare(b));
+  }, [customNamePairs]);
+
+  const renderTeamNameControl = ({
+    baseName,
+    shortNameValue = '',
+    onShortNameChange = () => {},
+    overrideValue = '',
+    onOverrideChange = () => {},
+    placeholder = '',
+    inputClassName = '',
+    shortToFullMap = null,
+  } = {}) => {
+    const resolveSuggestedFullName = (input) => {
+      if (!shortToFullMap || typeof shortToFullMap !== 'object') {
+        return '';
+      }
+      const trimmed = typeof input === 'string' ? input.trim() : '';
+      if (!trimmed) {
+        return '';
+      }
+      if (typeof shortToFullMap[trimmed] === 'string') {
+        return shortToFullMap[trimmed];
+      }
+      const lowered = trimmed.toLowerCase();
+      if (typeof shortToFullMap[lowered] === 'string') {
+        return shortToFullMap[lowered];
+      }
+      return '';
+    };
+
+    const hasCustomShortNames = linearShortNameOptions.length > 0;
+
+    if (!shouldUseRoundRobinSelectors || hasCustomShortNames) {
+      const options = [...linearShortNameOptions];
+      const trimmedShort = typeof shortNameValue === 'string' ? shortNameValue.trim() : '';
+      if (trimmedShort && !options.includes(trimmedShort)) {
+        options.unshift(trimmedShort);
+      }
+
+      const sanitizedId =
+        typeof baseName === 'string' && baseName.trim().length > 0
+          ? baseName
+              .trim()
+              .toLowerCase()
+              .replace(/\s+/g, '-')
+              .replace(/[^a-z0-9-_]/g, '')
+          : '';
+      const controlId = sanitizedId ? `team-short-name-${sanitizedId}` : 'team-short-name';
+
+      const handleShortNameSelect = (event) => {
+        const nextValue = event.target.value;
+        onShortNameChange(nextValue);
+
+        if (!nextValue) {
+          onOverrideChange('');
+          return;
+        }
+
+        const suggestion = resolveSuggestedFullName(nextValue);
+        if (suggestion && suggestion.trim().length > 0) {
+          onOverrideChange(suggestion.trim());
+          return;
+        }
+
+        const trimmedValue = typeof nextValue === 'string' ? nextValue.trim() : '';
+        onOverrideChange(trimmedValue);
+      };
+
+      const displayFullName =
+        (typeof overrideValue === 'string' && overrideValue.trim().length > 0)
+          ? overrideValue
+          : resolveSuggestedFullName(shortNameValue);
+
       return (
-        <input
-          type="text"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-          className={`w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold ${inputClassName}`}
-        />
+        <div className={inputClassName}>
+          <label
+            htmlFor={controlId}
+            className="block text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2"
+          >
+            Team Name
+          </label>
+          <select
+            id={controlId}
+            value={shortNameValue}
+            onChange={handleShortNameSelect}
+            className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold"
+          >
+            <option value="">Select short name</option>
+            {options.map((option) => (
+              <option key={`linear-short-name-option-${option}`} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+          {displayFullName && (
+            <p className="mt-2 text-slate-300 text-xs font-semibold">
+              Full name: <span className="text-slate-100">{displayFullName}</span>
+            </p>
+          )}
+        </div>
       );
     }
 
     const options = [...roundRobinTeamOptions];
-    if (typeof value === 'string' && value.trim().length > 0 && !options.includes(value)) {
-      options.unshift(value);
+    if (typeof shortNameValue === 'string' && shortNameValue.trim().length > 0 && !options.includes(shortNameValue.trim())) {
+      options.unshift(shortNameValue.trim());
     }
 
+    const sanitizedId =
+      typeof baseName === 'string' && baseName.trim().length > 0
+        ? baseName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '')
+        : '';
+    const controlId = sanitizedId ? `round-robin-team-${sanitizedId}` : 'round-robin-team';
+
+    const handleRoundRobinSelect = (event) => {
+      const nextShortName = event.target.value;
+      onShortNameChange(nextShortName);
+
+      if (!nextShortName) {
+        onOverrideChange('');
+        return;
+      }
+
+      const suggestion = resolveSuggestedFullName(nextShortName);
+      if (suggestion && suggestion.trim().length > 0) {
+        onOverrideChange(suggestion.trim());
+        return;
+      }
+
+      const trimmedShort = typeof nextShortName === 'string' ? nextShortName.trim() : '';
+      onOverrideChange(trimmedShort);
+    };
+
+    const displayFullName =
+      (typeof overrideValue === 'string' && overrideValue.trim().length > 0)
+        ? overrideValue
+        : resolveSuggestedFullName(shortNameValue);
+
     return (
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={`w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold ${inputClassName}`}
-      >
-        <option value="">Select team</option>
-        {options.map((option) => (
-          <option key={`round-robin-option-${option}`} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      <div className={inputClassName}>
+        <label
+          htmlFor={controlId}
+          className="block text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2"
+        >
+          Team Name
+        </label>
+        <select
+          id={controlId}
+          value={shortNameValue}
+          onChange={handleRoundRobinSelect}
+          className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold"
+        >
+          <option value="">Select team</option>
+          {options.map((option) => (
+            <option key={`round-robin-option-${option}`} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        {displayFullName && (
+          <p className="mt-2 text-slate-300 text-xs font-semibold">
+            Full name: <span className="text-slate-100">{displayFullName}</span>
+          </p>
+        )}
+      </div>
     );
   };
+
+  const roundRobinShortToFullMap = useMemo(() => {
+    const map = {};
+    if (roundRobinConfig && Array.isArray(roundRobinConfig.groups)) {
+      roundRobinConfig.groups.forEach((group) => {
+        if (!group || group.enabled === false || !Array.isArray(group.teams)) return;
+        group.teams.forEach((teamEntry) => {
+          if (teamEntry && typeof teamEntry === 'object') {
+            const shortName = typeof teamEntry.shortName === 'string' ? teamEntry.shortName.trim() : '';
+            const fullName = typeof teamEntry.fullName === 'string' ? teamEntry.fullName.trim() : '';
+            if (shortName) {
+              map[shortName] = fullName;
+              map[shortName.toLowerCase()] = fullName;
+            }
+          } else if (typeof teamEntry === 'string') {
+            const trimmed = teamEntry.trim();
+            if (trimmed) {
+              map[trimmed] = '';
+              map[trimmed.toLowerCase()] = '';
+            }
+          }
+        });
+      });
+    }
+    return map;
+  }, [roundRobinConfig]);
+
+  const combinedShortToFullMap = useMemo(() => {
+    return {
+      ...roundRobinShortToFullMap,
+      ...customShortToFullMap,
+    };
+  }, [roundRobinShortToFullMap, customShortToFullMap]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4 md:p-8 relative overflow-hidden">
@@ -3025,6 +3457,50 @@ const LiveScoring = () => {
             </div>
           )}
         </div>
+
+        {tournamentFormat !== 'roundRobin' && (
+          <div className="bg-gradient-to-br from-slate-800/90 via-slate-800/80 to-slate-900/90 rounded-2xl p-5 md:p-6 mb-8 shadow-2xl border border-slate-700/50 backdrop-blur-sm">
+            <div className="mb-4">
+              <h3 className="text-lg font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-300 via-cyan-300 to-purple-300">
+                Team Name Lists
+              </h3>
+              <p className="text-slate-400 text-xs md:text-sm mt-1">
+                Type the short team names and their full display names. One name per line. These appear in the dropdown below and auto-fill the full name when selected.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label className="block text-slate-200 text-sm font-semibold mb-2">
+                  Team names (short)
+                </label>
+                <textarea
+                  value={customShortNamesInput}
+                  onChange={(event) => setCustomShortNamesInput(event.target.value)}
+                  placeholder={`Team 1\nTeam 2\nTeam 3\nTeam 4`}
+                  className="w-full h-40 px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold resize-none"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-200 text-sm font-semibold mb-2">
+                  Full team names
+                </label>
+                <textarea
+                  value={customFullNamesInput}
+                  onChange={(event) => setCustomFullNamesInput(event.target.value)}
+                  placeholder={`Team ABC 1\nTeam DHDH\nTeam DJJD\nTeam DJHHDJ`}
+                  className="w-full h-40 px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold resize-none"
+                />
+              </div>
+            </div>
+            <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-400">
+              <span>
+                Short names: {customShortNamesInput.split(/\r?\n/).filter((line) => line.trim()).length} • Full names:{' '}
+                {customFullNamesInput.split(/\r?\n/).filter((line) => line.trim()).length}
+              </span>
+              <span className="text-slate-300">Paired entries: {customNamePairs.length}</span>
+            </div>
+          </div>
+        )}
 
         {/* NEW: JSON File Path Section */}
         <div className="bg-gradient-to-br from-slate-800/90 via-slate-800/80 to-slate-900/90 rounded-2xl p-6 md:p-8 mb-8 shadow-2xl border border-slate-700/50 backdrop-blur-sm">
@@ -3606,11 +4082,21 @@ const LiveScoring = () => {
                         Fetched
                       </span>
                     </div>
-                    {renderTeamNameControl(
-                      overrideValue,
-                      (nextValue) => handleTeamOverrideChange(baseName, nextValue),
-                      shouldUseRoundRobinSelectors ? 'Select team' : 'Custom team name (optional)'
-                    )}
+                    {(() => {
+                      const shortNameValue =
+                        key && typeof teamShortNameOverrides?.[key] === 'string'
+                          ? teamShortNameOverrides[key]
+                          : '';
+                      return renderTeamNameControl({
+                        baseName,
+                        shortNameValue,
+                        onShortNameChange: (nextValue) => handleTeamShortNameChange(baseName, nextValue),
+                        overrideValue,
+                        onOverrideChange: (nextValue) => handleTeamOverrideChange(baseName, nextValue),
+                        shortToFullMap: combinedShortToFullMap,
+                        placeholder: shouldUseRoundRobinSelectors ? 'Select team' : '',
+                      });
+                    })()}
                   </div>
                 );
               })
@@ -3639,11 +4125,22 @@ const LiveScoring = () => {
                         Manual
                       </span>
                     </div>
-                    {renderTeamNameControl(
-                      currentValue,
-                      (nextValue) => handleManualTeamSlotChange(position, nextValue),
-                      shouldUseRoundRobinSelectors ? 'Select team' : `Team ${position} name (optional)`
-                    )}
+                    {(() => {
+                      const manualBaseName = `manual-slot-${position}`;
+                      const shortNameValue =
+                        typeof teamShortNameOverrides?.[manualBaseName] === 'string'
+                          ? teamShortNameOverrides[manualBaseName]
+                          : '';
+                      return renderTeamNameControl({
+                        baseName: manualBaseName,
+                        shortNameValue,
+                        onShortNameChange: (nextValue) => handleTeamShortNameChange(manualBaseName, nextValue),
+                        overrideValue: currentValue,
+                        onOverrideChange: (nextValue) => handleManualTeamSlotChange(position, nextValue),
+                        shortToFullMap: combinedShortToFullMap,
+                        placeholder: shouldUseRoundRobinSelectors ? 'Select team' : '',
+                      });
+                    })()}
                   </div>
                 );
               });
