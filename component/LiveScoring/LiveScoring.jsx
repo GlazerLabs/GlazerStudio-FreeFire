@@ -1086,6 +1086,7 @@ const LiveScoring = () => {
       }
 
       setCurrentEliminationEntry(nextEntry);
+      const shouldHoldDisplay = Number(nextEntry?.eliminationRank) === 2;
 
       let transitionInTriggered = false;
 
@@ -1111,6 +1112,12 @@ const LiveScoring = () => {
       if (booyahAchievedRef.current || !isComponentMountedRef.current) {
         setCurrentEliminationEntry(null);
         break;
+      }
+
+      if (shouldHoldDisplay) {
+        eliminationAnimationQueueRef.current = [];
+        eliminationAnimationProcessingRef.current = false;
+        return;
       }
 
       await waitFor(2000);
@@ -1598,7 +1605,11 @@ const LiveScoring = () => {
       const position = index + 1;
       const team = displayTeams[index] || null;
       const manualName = manualTeamSlots[position] || '';
-      const teamName = team ? team.team_name || `Team ${position}` : manualName;
+      const fullTeamName = team ? team.team_name || `Team ${position}` : manualName;
+      const shortTeamName = team
+        ? team.short_name || team.shortName || fullTeamName
+        : manualName;
+      const teamName = shortTeamName || fullTeamName;
       const hasTeamData = Boolean(team) && !team.manualPlaceholder;
 
       let logoPath = '';
@@ -1674,6 +1685,7 @@ const LiveScoring = () => {
       return {
         position,
         teamName,
+        teamFullName: fullTeamName,
         rank: `#${displayRank}`,
         logoPath,
         finValue,
@@ -1753,6 +1765,13 @@ const LiveScoring = () => {
           eliminationLogoPath = `${baseLogoPath}${logoSeparator}${logoFileName}`;
         }
 
+        const eliminatedByName =
+          eliminationTeamData.eliminated_team_name ||
+          eliminationTeamData.eliminatedTeamName ||
+          eliminationTeamData.eliminated_by ||
+          eliminationTeamData.eliminatedBy ||
+          '';
+
         jsonData.ELIMTEAM = eliminationTeamName;
         jsonData.ELIMRANK =
           eliminationRankValue !== undefined && eliminationRankValue !== null
@@ -1760,6 +1779,7 @@ const LiveScoring = () => {
             : '';
         jsonData.ELIMFIN = eliminationKills;
         jsonData.ELIMLOGO = eliminationLogoPath;
+        jsonData.ELIMBY = eliminatedByName || '';
 
         const playerCount = Array.isArray(eliminationTeamData.player_stats)
           ? eliminationTeamData.player_stats.length
@@ -1782,6 +1802,7 @@ const LiveScoring = () => {
         jsonData.ELIMRANK = '';
         jsonData.ELIMFIN = '';
         jsonData.ELIMLOGO = '';
+        jsonData.ELIMBY = '';
         for (let index = 0; index < 4; index += 1) {
           jsonData[`ELIMP${index + 1}IMG`] = '';
         }
@@ -1791,6 +1812,7 @@ const LiveScoring = () => {
       jsonData.ELIMRANK = '';
       jsonData.ELIMFIN = '';
       jsonData.ELIMLOGO = '';
+      jsonData.ELIMBY = '';
       for (let index = 0; index < 4; index += 1) {
         jsonData[`ELIMP${index + 1}IMG`] = '';
       }

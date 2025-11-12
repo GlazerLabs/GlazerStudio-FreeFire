@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 const GROUP_NAME_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -224,7 +224,7 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
     });
   };
 
-  const getGroupTeamsFieldText = (group, field) => {
+  const getGroupTeamsFieldText = useCallback((group, field) => {
     if (!group || !Array.isArray(group.teams)) {
       return '';
     }
@@ -245,14 +245,122 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
         return '';
       })
       .join('\n');
-  };
+  }, []);
+
+  const [groupTextInputs, setGroupTextInputs] = useState(() => {
+    if (!Array.isArray(safeConfig.groups)) {
+      return [];
+    }
+
+    return safeConfig.groups.map((group) => {
+      const short = getGroupTeamsFieldText(group, 'shortName');
+      const full = getGroupTeamsFieldText(group, 'fullName');
+      return {
+        short,
+        full,
+        syncedShort: short,
+        syncedFull: full,
+      };
+    });
+  });
+
+  useEffect(() => {
+    if (!Array.isArray(safeConfig.groups)) {
+      if (groupTextInputs.length > 0) {
+        setGroupTextInputs([]);
+      }
+      return;
+    }
+
+    const snapshot = safeConfig.groups.map((group) => ({
+      short: getGroupTeamsFieldText(group, 'shortName'),
+      full: getGroupTeamsFieldText(group, 'fullName'),
+    }));
+
+    setGroupTextInputs((prev) => {
+      let changed = false;
+
+      const next = snapshot.map((snap, index) => {
+        const existing = prev[index];
+        if (!existing) {
+          changed = true;
+          return {
+            short: snap.short,
+            full: snap.full,
+            syncedShort: snap.short,
+            syncedFull: snap.full,
+          };
+        }
+
+        let short = existing.short;
+        let full = existing.full;
+
+        if (existing.short === existing.syncedShort && existing.syncedShort !== snap.short) {
+          short = snap.short;
+          changed = true;
+        }
+
+        if (existing.full === existing.syncedFull && existing.syncedFull !== snap.full) {
+          full = snap.full;
+          changed = true;
+        }
+
+        const syncedShort = snap.short;
+        const syncedFull = snap.full;
+
+        if (syncedShort !== existing.syncedShort || syncedFull !== existing.syncedFull) {
+          changed = true;
+        }
+
+        return {
+          short,
+          full,
+          syncedShort,
+          syncedFull,
+        };
+      });
+
+      if (next.length !== prev.length) {
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [safeConfig.groups, getGroupTeamsFieldText]);
 
   const handleGroupTeamListChange = (groupIndex, field, value) => {
+    setGroupTextInputs((prev) => {
+      const next = [...prev];
+      const existing = next[groupIndex] || {
+        short: '',
+        full: '',
+        syncedShort: '',
+        syncedFull: '',
+      };
+
+      next[groupIndex] = {
+        short: field === 'shortName' ? value : existing.short,
+        full: field === 'fullName' ? value : existing.full,
+        syncedShort: existing.syncedShort,
+        syncedFull: existing.syncedFull,
+      };
+
+      return next;
+    });
+
+    const currentInput = groupTextInputs[groupIndex] || {
+      short: getGroupTeamsFieldText(safeConfig.groups[groupIndex], 'shortName'),
+      full: getGroupTeamsFieldText(safeConfig.groups[groupIndex], 'fullName'),
+    };
+
+    const shortSource = field === 'shortName' ? value : currentInput.short;
+    const fullSource = field === 'fullName' ? value : currentInput.full;
+
     const parseLines = (text) =>
       text
         .replace(/\r\n/g, '\n')
         .split('\n')
-        .map((line) => line.trim());
+        .map((line) => line.replace(/\r/g, ''));
 
     const baseGroup = safeConfig.groups[groupIndex] || { teams: [] };
     const existingShort = Array.isArray(baseGroup.teams)
@@ -272,8 +380,8 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
         )
       : [];
 
-    const updatedShort = field === 'shortName' ? parseLines(value) : existingShort;
-    const updatedFull = field === 'fullName' ? parseLines(value) : existingFull;
+    const updatedShort = parseLines(shortSource);
+    const updatedFull = parseLines(fullSource);
 
     const maxLength = Math.max(
       safeConfig.teamsPerGroup,
@@ -352,60 +460,102 @@ const TournamentFormatSelector = ({ format = 'linear', onFormatChange, roundRobi
 
       {format === 'roundRobin' && (
         <div className="space-y-4">
-          {safeConfig.groups.map((group, groupIndex) => (
-            <div
-              key={`round-robin-group-${groupIndex}`}
-              className="border border-slate-700/60 rounded-2xl p-4 bg-slate-900/60 shadow-inner space-y-4"
-            >
-              <div>
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <label className="block text-slate-200 text-xs font-semibold">
-                    Group Name
-                  </label>
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={group.enabled !== false}
-                      onChange={(event) => handleGroupEnabledToggle(groupIndex, event.target.checked)}
-                      className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+          {safeConfig.groups.map((group, groupIndex) => {
+            const inputState =
+              groupTextInputs[groupIndex] ||
+              (function deriveFallback() {
+                const short = getGroupTeamsFieldText(group, 'shortName');
+                const full = getGroupTeamsFieldText(group, 'fullName');
+                return {
+                  short,
+                  full,
+                  syncedShort: short,
+                  syncedFull: full,
+                };
+              })();
+
+            const shortNamesText = inputState.short;
+            const fullNamesText = inputState.full;
+            const shortNameCount = shortNamesText
+              .split(/\r?\n/)
+              .map((line) => line.replace(/\r/g, ''))
+              .filter((line) => line.trim()).length;
+            const fullNameCount = fullNamesText
+              .split(/\r?\n/)
+              .map((line) => line.replace(/\r/g, ''))
+              .filter((line) => line.trim()).length;
+            const pairedEntriesCount = Array.isArray(group.teams)
+              ? group.teams.filter((team) => {
+                  if (!team || typeof team !== 'object') {
+                    return false;
+                  }
+                  const shortName =
+                    typeof team.shortName === 'string' ? team.shortName.trim() : '';
+                  const fullName =
+                    typeof team.fullName === 'string' ? team.fullName.trim() : '';
+                  return Boolean(shortName || fullName);
+                }).length
+              : 0;
+
+            return (
+              <div
+                key={`round-robin-group-${groupIndex}`}
+                className="border border-slate-700/60 rounded-2xl p-4 bg-slate-900/60 shadow-inner space-y-4"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <label className="block text-slate-200 text-xs font-semibold">
+                      Group Name
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={group.enabled !== false}
+                        onChange={(event) => handleGroupEnabledToggle(groupIndex, event.target.checked)}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500"
+                      />
+                      Active
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={group.name}
+                    onChange={(event) => handleGroupNameChange(groupIndex, event.target.value)}
+                    placeholder={getDefaultGroupName(groupIndex)}
+                    className="w-full px-4 py-2.5 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-200 text-sm font-semibold mb-2">
+                      Team names (short)
+                    </label>
+                    <textarea
+                      value={shortNamesText}
+                      onChange={(event) => handleGroupTeamListChange(groupIndex, 'shortName', event.target.value)}
+                      placeholder={`Team 1\nTeam 2\nTeam 3\nTeam 4`}
+                      className="w-full h-40 px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold resize-none"
                     />
-                    Active
-                  </label>
+                  </div>
+                  <div>
+                    <label className="block text-slate-200 text-sm font-semibold mb-2">
+                      Full team names
+                    </label>
+                    <textarea
+                      value={fullNamesText}
+                      onChange={(event) => handleGroupTeamListChange(groupIndex, 'fullName', event.target.value)}
+                      placeholder={`Team ABC 1\nTeam DHDH\nTeam DJJD\nTeam DJHHDJ`}
+                      className="w-full h-40 px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all shadow-lg font-semibold resize-none"
+                    />
+                  </div>
                 </div>
-                <input
-                  type="text"
-                  value={group.name}
-                  onChange={(event) => handleGroupNameChange(groupIndex, event.target.value)}
-                  placeholder={getDefaultGroupName(groupIndex)}
-                  className="w-full px-4 py-2.5 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
-                />
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-slate-200 text-xs font-semibold uppercase tracking-wider mb-2">
-                    Team names (short)
-                  </label>
-                  <textarea
-                    value={getGroupTeamsFieldText(group, 'shortName')}
-                    onChange={(event) => handleGroupTeamListChange(groupIndex, 'shortName', event.target.value)}
-                    placeholder={`Team 1\nTeam 2\nTeam 3`}
-                    className="w-full h-40 px-4 py-3 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm resize-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-slate-200 text-xs font-semibold uppercase tracking-wider mb-2">
-                    Full team names
-                  </label>
-                  <textarea
-                    value={getGroupTeamsFieldText(group, 'fullName')}
-                    onChange={(event) => handleGroupTeamListChange(groupIndex, 'fullName', event.target.value)}
-                    placeholder={`Team ABC 1\nTeam DHDH\nTeam DJJD`}
-                    className="w-full h-40 px-4 py-3 bg-slate-950/70 text-white rounded-lg border border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm resize-none"
-                  />
+                <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-400">
+                  <span>Short names: {shortNameCount} • Full names: {fullNameCount}</span>
+                  <span className="text-slate-300">Paired entries: {pairedEntriesCount}</span>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
