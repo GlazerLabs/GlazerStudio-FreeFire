@@ -1175,6 +1175,7 @@ const LiveScoring = () => {
     eliminationAnimationTimeoutsRef.current.clear();
     eliminationAnimationProcessingRef.current = false;
     setCurrentEliminationEntry(null);
+    // NOTE: Do NOT clear lastEliminationEntryRef here - we need it for JSON after booyah
   }, []);
 
   const enqueueEliminationAnimation = useCallback(
@@ -1795,15 +1796,42 @@ const LiveScoring = () => {
     // Use current elimination entry, or fallback to stored last elimination entry (rank 2) after booyah
     let latestEliminationEntry = currentEliminationEntry;
     
-    // If no current entry but booyah is achieved, use stored last elimination entry
-    // Also use stored entry if current entry is rank 2 and we have a stored one (to ensure data persistence)
-    if (!latestEliminationEntry && booyahAchievedRef.current && lastEliminationEntryRef.current) {
-      latestEliminationEntry = lastEliminationEntryRef.current;
-      console.log('[JSON DEBUG] Using stored last elimination entry after booyah:', latestEliminationEntry);
-    } else if (latestEliminationEntry && Number(latestEliminationEntry.eliminationRank) === 2 && lastEliminationEntryRef.current) {
-      // For rank 2, prefer stored entry to ensure we have complete data
-      latestEliminationEntry = lastEliminationEntryRef.current;
-      console.log('[JSON DEBUG] Using stored last elimination entry for rank 2:', latestEliminationEntry);
+    // Debug: Log state when booyah is achieved
+    if (booyahAchievedRef.current) {
+      console.log('[JSON DEBUG] Booyah achieved - checking elimination entries:', {
+        hasCurrentEntry: !!currentEliminationEntry,
+        hasStoredEntry: !!lastEliminationEntryRef.current,
+        storedEntryRank: lastEliminationEntryRef.current?.eliminationRank,
+      });
+    }
+    
+    // Priority: Use stored entry if available (especially important when booyah is achieved)
+    // This ensures rank 2 elimination data persists even after booyah clears currentEliminationEntry
+    if (lastEliminationEntryRef.current) {
+      const storedRank = Number(lastEliminationEntryRef.current.eliminationRank);
+      // Always use stored entry if it's rank 2, or if booyah is achieved and we have a stored entry
+      if (storedRank === 2 || (booyahAchievedRef.current && !latestEliminationEntry)) {
+        latestEliminationEntry = lastEliminationEntryRef.current;
+        console.log('[JSON DEBUG] Using stored last elimination entry:', {
+          reason: booyahAchievedRef.current ? 'booyah achieved' : 'rank 2',
+          entry: latestEliminationEntry,
+          hasTeamSnapshot: !!latestEliminationEntry.teamSnapshot,
+        });
+      }
+    }
+    
+    // Fallback: If no stored entry and booyah achieved, try current entry
+    if (!latestEliminationEntry && booyahAchievedRef.current && currentEliminationEntry) {
+      latestEliminationEntry = currentEliminationEntry;
+      console.log('[JSON DEBUG] Using current elimination entry after booyah:', latestEliminationEntry);
+    }
+    
+    // Final check: If still no entry after booyah, log warning
+    if (!latestEliminationEntry && booyahAchievedRef.current) {
+      console.warn('[JSON DEBUG] WARNING: No elimination entry found after booyah!', {
+        currentEliminationEntry: currentEliminationEntry,
+        storedEntry: lastEliminationEntryRef.current,
+      });
     }
 
     if (latestEliminationEntry) {
