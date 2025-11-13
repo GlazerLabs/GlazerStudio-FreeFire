@@ -3581,7 +3581,7 @@ const LiveScoring = () => {
         <div className="text-center mb-10">
           <div className="inline-block mb-4">
             <h1 className="text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-cyan-400 to-purple-400 drop-shadow-2xl mb-3">
-              Free Fire
+      Free Fire Team Management System
             </h1>
             <div className="h-1.5 bg-gradient-to-r from-blue-500 via-cyan-500 to-purple-500 rounded-full mx-auto w-32"></div>
           </div>
