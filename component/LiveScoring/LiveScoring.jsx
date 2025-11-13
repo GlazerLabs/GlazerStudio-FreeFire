@@ -1106,8 +1106,10 @@ const LiveScoring = () => {
         });
       }
 
-      // Wait for JSON data to be written first (give it time to update)
-      await waitFor(500);
+      // Write JSON data FIRST before calling transition API
+      // We need to wait for state to update and JSON to be generated
+      // The useEffect will handle writing, but we wait to ensure it completes
+      await waitFor(600); // Give enough time for JSON generation and write
 
       let transitionInTriggered = false;
 
@@ -1794,9 +1796,14 @@ const LiveScoring = () => {
     let latestEliminationEntry = currentEliminationEntry;
     
     // If no current entry but booyah is achieved, use stored last elimination entry
+    // Also use stored entry if current entry is rank 2 and we have a stored one (to ensure data persistence)
     if (!latestEliminationEntry && booyahAchievedRef.current && lastEliminationEntryRef.current) {
       latestEliminationEntry = lastEliminationEntryRef.current;
       console.log('[JSON DEBUG] Using stored last elimination entry after booyah:', latestEliminationEntry);
+    } else if (latestEliminationEntry && Number(latestEliminationEntry.eliminationRank) === 2 && lastEliminationEntryRef.current) {
+      // For rank 2, prefer stored entry to ensure we have complete data
+      latestEliminationEntry = lastEliminationEntryRef.current;
+      console.log('[JSON DEBUG] Using stored last elimination entry for rank 2:', latestEliminationEntry);
     }
 
     if (latestEliminationEntry) {
@@ -1815,10 +1822,19 @@ const LiveScoring = () => {
         });
       }
 
-      const eliminationTeamData =
-        combinedRankedTeams.find((team) => getTeamEliminationKey(team) === eliminationKey) ||
-        latestEliminationEntry.teamSnapshot ||
-        null;
+      // Try to find team in current teams first, then fallback to snapshot
+      let eliminationTeamData = combinedRankedTeams.find((team) => getTeamEliminationKey(team) === eliminationKey);
+      
+      // If not found in current teams, use the snapshot (important for rank 2 when team is already eliminated)
+      if (!eliminationTeamData && latestEliminationEntry.teamSnapshot) {
+        eliminationTeamData = latestEliminationEntry.teamSnapshot;
+        if (isLastTwoTeams) {
+          console.log('[JSON DEBUG] Using teamSnapshot for rank 2 elimination:', {
+            hasSnapshot: !!latestEliminationEntry.teamSnapshot,
+            snapshotKeys: latestEliminationEntry.teamSnapshot ? Object.keys(latestEliminationEntry.teamSnapshot) : [],
+          });
+        }
+      }
 
       if (eliminationTeamData) {
         if (isLastTwoTeams) {
