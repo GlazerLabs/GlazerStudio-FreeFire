@@ -75,6 +75,19 @@ const normalizeTeamNameKey = (name) => {
   return name.trim().toLowerCase();
 };
 
+const normalizeSpectatorName = (name) => {
+  if (typeof name !== 'string') return '';
+  return name.trim().toLowerCase();
+};
+
+const canonicalizeSpectatorName = (name) => {
+  if (typeof name !== 'string') return '';
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+};
+
 const normalizeGroupKey = (name) => {
   if (typeof name !== 'string') return '';
   return name.replace(/\s+/g, '').trim().toLowerCase();
@@ -297,6 +310,8 @@ const LiveScoring = () => {
   const [zoneOutImage, setZoneOutImage] = useState('D:\\Production Assets\\OUTZONE\\100001.png');
   const [specTrueImagePath, setSpecTrueImagePath] = useState('D:\\Production Assets\\SPECTRUE.png');
   const [specFalseImagePath, setSpecFalseImagePath] = useState('D:\\Production Assets\\SPECFALSE.png');
+  const [elimTrueImagePath, setElimTrueImagePath] = useState('D:\\Production Assets\\ELIMTRUE.png');
+  const [elimFalseImagePath, setElimFalseImagePath] = useState('D:\\Production Assets\\ELIMFALSE.png');
   const [cumulativeScores, setCumulativeScores] = useState({});
   const [matchHistory, setMatchHistory] = useState([]);
   const [eliminationHistory, setEliminationHistory] = useState([]);
@@ -607,6 +622,8 @@ const LiveScoring = () => {
         zoneOutImage,
         specTrueImagePath,
         specFalseImagePath,
+        elimTrueImagePath,
+        elimFalseImagePath,
       };
 
       const serialized = JSON.stringify(payload, null, 2);
@@ -653,6 +670,8 @@ const LiveScoring = () => {
     zoneOutImage,
     specTrueImagePath,
     specFalseImagePath,
+    elimTrueImagePath,
+    elimFalseImagePath,
   ]);
 
   const handleImportedConfiguration = useCallback(
@@ -791,6 +810,14 @@ const LiveScoring = () => {
 
       if (typeof parsed.specFalseImagePath === 'string') {
         setSpecFalseImagePath(parsed.specFalseImagePath);
+      }
+
+      if (typeof parsed.elimTrueImagePath === 'string') {
+        setElimTrueImagePath(parsed.elimTrueImagePath);
+      }
+
+      if (typeof parsed.elimFalseImagePath === 'string') {
+        setElimFalseImagePath(parsed.elimFalseImagePath);
       }
 
       setConfigTransferStatus({
@@ -1024,10 +1051,12 @@ const LiveScoring = () => {
   }, [matchId, clientId, liveData]); // Include liveData to restart when data is available
 
   const activeSpectatorTeamName = useMemo(() => {
-    const desiredObserverId = Number(programInput);
-    if (!Number.isFinite(desiredObserverId) || desiredObserverId <= 0) {
+    const rawProgramValue = Number(programInput);
+    if (!Number.isFinite(rawProgramValue) || rawProgramValue <= 0) {
       return null;
     }
+
+    const desiredIndex = Math.max(0, Math.floor(rawProgramValue) - 1);
 
     const matchEntries = Array.isArray(liveData)
       ? liveData
@@ -1035,41 +1064,60 @@ const LiveScoring = () => {
       ? liveData.match_stats
       : [];
 
+    console.log('matchEntries', matchEntries);
+
     for (const entry of matchEntries) {
       if (!entry || typeof entry !== 'object') continue;
-      const extra = entry.match_stats_extra || entry.matchStatsExtra || {};
+      console.log('entry', entry);
+      const extra = entry.match.match_stats_extra || entry.match.matchStatsExtra || {};
       const specInfo =
         extra.spector_info ||
         extra.spectorInfo ||
         extra.spectator_info ||
         extra.spectatorInfo;
 
-      if (!Array.isArray(specInfo)) {
+      if (!Array.isArray(specInfo) || specInfo.length === 0) {
         continue;
       }
 
-      const spectatorEntry = specInfo.find((info) => {
-        const observerId =
-          info?.observer_id ??
-          info?.observerId ??
-          info?.spector_id ??
-          info?.spectorId ??
-          null;
-        const numericObserverId = Number(observerId);
-        return Number.isFinite(numericObserverId) && numericObserverId === desiredObserverId;
-      });
+      if (desiredIndex >= specInfo.length) {
+        continue;
+      }
 
-      if (spectatorEntry) {
-        const teamNameCandidate =
-          spectatorEntry.observer_team_name ??
-          spectatorEntry.observerTeamName ??
-          spectatorEntry.team_name ??
-          spectatorEntry.teamName ??
-          spectatorEntry.target_team_name ??
-          spectatorEntry.targetTeamName ??
+      const spectatorEntry = specInfo[desiredIndex];
+      if (!spectatorEntry || typeof spectatorEntry !== 'object') {
+        continue;
+      }
+
+      const teamNameCandidate =
+        spectatorEntry.observer_team_name ??
+        spectatorEntry.observerTeamName ??
+        spectatorEntry.team_name ??
+        spectatorEntry.teamName ??
+        spectatorEntry.target_team_name ??
+        spectatorEntry.targetTeamName ??
+        '';
+
+      if (typeof teamNameCandidate === 'string' && teamNameCandidate.trim()) {
+        return teamNameCandidate.trim();
+      }
+
+      // If the target slot had no team name, try to locate the next non-empty slot
+      for (let idx = desiredIndex + 1; idx < specInfo.length; idx += 1) {
+        const altEntry = specInfo[idx];
+        if (!altEntry || typeof altEntry !== 'object') {
+          continue;
+        }
+        const altTeamName =
+          altEntry.observer_team_name ??
+          altEntry.observerTeamName ??
+          altEntry.team_name ??
+          altEntry.teamName ??
+          altEntry.target_team_name ??
+          altEntry.targetTeamName ??
           '';
-        if (typeof teamNameCandidate === 'string' && teamNameCandidate.trim()) {
-          return teamNameCandidate.trim();
+        if (typeof altTeamName === 'string' && altTeamName.trim()) {
+          return altTeamName.trim();
         }
       }
     }
@@ -1079,7 +1127,12 @@ const LiveScoring = () => {
 
   const normalizedActiveSpectatorTeamKey = useMemo(() => {
     if (!activeSpectatorTeamName) return '';
-    return normalizeTeamNameKey(activeSpectatorTeamName);
+    return normalizeSpectatorName(activeSpectatorTeamName);
+  }, [activeSpectatorTeamName]);
+
+  const canonicalActiveSpectatorTeamKey = useMemo(() => {
+    if (!activeSpectatorTeamName) return '';
+    return canonicalizeSpectatorName(activeSpectatorTeamName);
   }, [activeSpectatorTeamName]);
 
   // NEW: Helper function to get HP value for a player (0-200)
@@ -1773,6 +1826,8 @@ const LiveScoring = () => {
     const zoneOut = zoneOutImage.trim();
     const specTrueImage = specTrueImagePath.trim();
     const specFalseImage = specFalseImagePath.trim();
+    const elimTrueImage = elimTrueImagePath.trim();
+    const elimFalseImage = elimFalseImagePath.trim();
 
     const totalSlots = Math.max(displayTeams.length, 12);
     const baseLogoPath = logoFolderPath.trim() ? logoFolderPath.replace(/[\\/]+$/, '') : '';
@@ -1781,6 +1836,24 @@ const LiveScoring = () => {
     const hpSeparator = baseHpPath.includes('\\') ? '\\' : '/';
 
     const groupRankCounters = isGroupWiseMode ? new Map() : null;
+
+    const hasActiveSpectator =
+      Boolean(normalizedActiveSpectatorTeamKey) || Boolean(canonicalActiveSpectatorTeamKey);
+
+    const matchesActiveSpectator = (name) => {
+      if (!hasActiveSpectator || typeof name !== 'string') return false;
+      const trimmed = name.trim();
+      if (!trimmed) return false;
+      const lower = trimmed.toLowerCase();
+      if (normalizedActiveSpectatorTeamKey && lower === normalizedActiveSpectatorTeamKey) {
+        return true;
+      }
+      const canonical = lower.replace(/[^a-z0-9]/g, '');
+      if (canonicalActiveSpectatorTeamKey && canonical && canonical === canonicalActiveSpectatorTeamKey) {
+        return true;
+      }
+      return false;
+    };
 
     const slots = Array.from({ length: totalSlots }, (_, index) => {
       const position = index + 1;
@@ -1849,34 +1922,33 @@ const LiveScoring = () => {
         return '';
       });
 
-      const normalizedCandidateKeys = [];
+      const candidateNames = [];
       if (team) {
-        const candidateNames = buildTeamNameCandidates(team);
-        candidateNames.forEach((candidate) => {
-          const normalized = normalizeTeamNameKey(candidate);
-          if (normalized) {
-            normalizedCandidateKeys.push(normalized);
+        const builtCandidates = buildTeamNameCandidates(team);
+        builtCandidates.forEach((candidate) => {
+          if (typeof candidate === 'string' && candidate.trim()) {
+            candidateNames.push(candidate);
           }
         });
       }
-
-      const normalizedFullTeamName = normalizeTeamNameKey(fullTeamName);
-      if (normalizedFullTeamName) {
-        normalizedCandidateKeys.push(normalizedFullTeamName);
+      if (typeof fullTeamName === 'string' && fullTeamName.trim()) {
+        candidateNames.push(fullTeamName);
+      }
+      if (typeof teamName === 'string' && teamName.trim()) {
+        candidateNames.push(teamName);
       }
 
-      const normalizedShortTeamName = normalizeTeamNameKey(teamName);
-      if (normalizedShortTeamName) {
-        normalizedCandidateKeys.push(normalizedShortTeamName);
-      }
-
-      const isSpectatedTeam =
-        normalizedActiveSpectatorTeamKey &&
-        normalizedCandidateKeys.some((candidate) => candidate === normalizedActiveSpectatorTeamKey);
+      const isSpectatedTeam = candidateNames.some((candidate) => matchesActiveSpectator(candidate));
 
       const specImageValue = isSpectatedTeam
         ? specTrueImage || specFalseImage || ''
         : specFalseImage || '';
+
+      const eliminatedImageValue = hasTeamData
+        ? isTeamEliminated(team)
+          ? elimTrueImage || elimFalseImage || ''
+          : elimFalseImage || ''
+        : elimFalseImage || '';
 
       let displayRank = position;
       if (isGroupWiseMode) {
@@ -1907,6 +1979,7 @@ const LiveScoring = () => {
         winRateValue,
         hpPaths,
         specImageValue,
+        eliminatedImageValue,
       };
     });
 
@@ -1947,6 +2020,10 @@ const LiveScoring = () => {
 
     slots.forEach(({ position, specImageValue }) => {
       jsonData[`ISSPEC${position}`] = specImageValue;
+    });
+
+    slots.forEach(({ position, eliminatedImageValue }) => {
+      jsonData[`ISELIM${position}`] = eliminatedImageValue;
     });
 
     // Use current elimination entry, or fallback to stored last elimination entry (rank 2) after booyah
@@ -2216,6 +2293,8 @@ const LiveScoring = () => {
     zoneOutImage,
     specTrueImagePath,
     specFalseImagePath,
+    elimTrueImagePath,
+    elimFalseImagePath,
     activeSpectatorTeamName,
     eliminationHistory,
     currentEliminationEntry,
@@ -3963,6 +4042,39 @@ const LiveScoring = () => {
                 />
                 <p className="text-slate-400 text-xs">
                   Displayed for every other team slot.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label className="block text-slate-200 text-sm font-semibold mb-3">
+                  Eliminated Image Path (True)
+                </label>
+                <input
+                  type="text"
+                  value={elimTrueImagePath}
+                  onChange={(e) => setElimTrueImagePath(e.target.value)}
+                  placeholder="D:/Production Assets/ELIMTRUE.png"
+                  className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all shadow-lg font-mono text-sm mb-2"
+                />
+                <p className="text-slate-400 text-xs">
+                  Used for teams whose live data marks `is_eliminated` as true.
+                </p>
+              </div>
+              <div>
+                <label className="block text-slate-200 text-sm font-semibold mb-3">
+                  Eliminated Image Path (False)
+                </label>
+                <input
+                  type="text"
+                  value={elimFalseImagePath}
+                  onChange={(e) => setElimFalseImagePath(e.target.value)}
+                  placeholder="D:/Production Assets/ELIMFALSE.png"
+                  className="w-full px-5 py-3 bg-slate-900/80 text-white rounded-xl border-2 border-slate-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all shadow-lg font-mono text-sm mb-2"
+                />
+                <p className="text-slate-400 text-xs">
+                  Displayed for teams still alive in the match.
                 </p>
               </div>
             </div>
