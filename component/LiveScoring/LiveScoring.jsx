@@ -1045,7 +1045,7 @@ const LiveScoring = () => {
       if (matchId && clientId) {
         fetchLiveScoringSilent(); // Silent update, no loading state
       }
-    }, 3000); // 3 seconds
+    }, 500); // 3 seconds
 
     return () => clearInterval(interval);
   }, [matchId, clientId, liveData]); // Include liveData to restart when data is available
